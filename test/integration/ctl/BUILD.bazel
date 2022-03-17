@@ -49,6 +49,7 @@ filegroup(
     srcs = [
         ":package-srcs",
         "//test/integration/ctl/install_framework:all-srcs",
+        "//test/integration/ctl/migrate:all-srcs",
     ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],
@@ -57,7 +58,7 @@ filegroup(
 go_library(
     name = "go_default_library",
     srcs = ["ctl_install.go"],
-    importpath = "github.com/jetstack/cert-manager/test/integration/ctl",
+    importpath = "github.com/cert-manager/cert-manager/test/integration/ctl",
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/ctl/cmd:go_default_library",

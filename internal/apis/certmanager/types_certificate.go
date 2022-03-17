@@ -19,7 +19,7 @@ package certmanager
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cmmeta "github.com/jetstack/cert-manager/internal/apis/meta"
+	cmmeta "github.com/cert-manager/cert-manager/internal/apis/meta"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -123,12 +123,12 @@ type CertificateSpec struct {
 	// denoted issuer.
 	SecretName string
 
-	// SecretTemplate defines annotations and labels to be propagated
-	// to the Kubernetes Secret when it is created or updated. Once created,
-	// labels and annotations are not yet removed from the Secret when they are
-	// removed from the template. See https://github.com/jetstack/cert-manager/issues/4292
-	// +optional
-	SecretTemplate *CertificateSecretTemplate `json:"secretTemplate,omitempty"`
+	// SecretTemplate defines annotations and labels to be copied to the
+	// Certificate's Secret. Labels and annotations on the Secret will be changed
+	// as they appear on the SecretTemplate when added or removed. SecretTemplate
+	// annotations are added in conjunction with, and cannot overwrite, the base
+	// set of annotations cert-manager sets on the Certificate's Secret.
+	SecretTemplate *CertificateSecretTemplate
 
 	// Keystores configures additional keystore output formats stored in the
 	// `secretName` Secret resource.
@@ -165,6 +165,13 @@ type CertificateSpec struct {
 	// revisionHistoryLimit must be a value of `1` or greater. If unset (`nil`),
 	// revisions will not be garbage collected. Default value is `nil`.
 	RevisionHistoryLimit *int32
+
+	// AdditionalOutputFormats defines extra output formats of the private key
+	// and signed certificate chain to be written to this Certificate's target
+	// Secret. This is an Alpha Feature and is only enabled with the
+	// `--feature-gates=AdditionalCertificateOutputFormats=true` option on both
+	// the controller and webhook components.
+	AdditionalOutputFormats []CertificateAdditionalOutputFormat
 }
 
 // CertificatePrivateKey contains configuration options for private keys
@@ -203,6 +210,39 @@ type CertificatePrivateKey struct {
 	// and will default to `256` if not specified.
 	// No other values are allowed.
 	Size int
+}
+
+// CertificateOutputFormatType specifies which additional output formats should
+// be written to the Certificate's target Secret.
+// Allowed values are `DER` or `CombinedPEM`.
+// When Type is set to `DER` an additional entry `key.der` will be written to
+// the Secret, containing the binary format of the private key.
+// When Type is set to `CombinedPEM` an additional entry `tls-combined.pem`
+// will be written to the Secret, containing the PEM formatted private key and
+// signed certificate chain (tls.key + tls.crt concatenated).
+type CertificateOutputFormatType string
+
+const (
+	// AdditionalCertificateOutputFormatDER  writes the Certificate's private key
+	// in DER binary format to the `key.der` target Secret Data key.
+	AdditionalCertificateOutputFormatDER CertificateOutputFormatType = "DER"
+
+	// AdditionalCertificateOutputFormatCombinedPEM  writes the Certificate's
+	// signed certificate chain and private key, in PEM format, to the
+	// `tls-combined.pem` target Secret Data key. The value at this key will
+	// include the private key PEM document, followed by at least one new line
+	// character, followed by the chain of signed certificate PEM documents
+	// (`<private key> + \n + <signed certificate chain>`).
+	AdditionalCertificateOutputFormatCombinedPEM CertificateOutputFormatType = "CombinedPEM"
+)
+
+// CertificateAdditionalOutputFormat defines an additional output format of a
+// Certificate resource. These contain supplementary data formats of the signed
+// certificate chain and paired private key.
+type CertificateAdditionalOutputFormat struct {
+	// Type is the name of the format type that should be written to the
+	// Certificate's target Secret.
+	Type CertificateOutputFormatType
 }
 
 // Denotes how private keys should be generated or sourced when a Certificate
@@ -398,9 +438,9 @@ const (
 type CertificateSecretTemplate struct {
 	// Annotations is a key value map to be copied to the target Kubernetes Secret.
 	// +optional
-	Annotations map[string]string `json:"annotations,omitempty"`
+	Annotations map[string]string
 
 	// Labels is a key value map to be copied to the target Kubernetes Secret.
 	// +optional
-	Labels map[string]string `json:"labels,omitempty"`
+	Labels map[string]string
 }

@@ -27,11 +27,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 
-	cmclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
-	cmlisters "github.com/jetstack/cert-manager/pkg/client/listers/certmanager/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/issuer"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
+	cmclient "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned"
+	cmlisters "github.com/cert-manager/cert-manager/pkg/client/listers/certmanager/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/issuer"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
 )
 
 type controller struct {
@@ -54,6 +54,9 @@ type controller struct {
 	// issuerFactory is used to obtain a reference to the Issuer implementation
 	// for each ClusterIssuer resource
 	issuerFactory issuer.Factory
+
+	// fieldManager is the manager name used for the Apply operations.
+	fieldManager string
 }
 
 // Register registers and constructs the controller using the provided context.
@@ -87,6 +90,7 @@ func (c *controller) Register(ctx *controllerpkg.Context) (workqueue.RateLimitin
 	// instantiate additional helpers used by this controller
 	c.issuerFactory = issuer.NewFactory(ctx)
 	c.cmClient = ctx.CMClient
+	c.fieldManager = ctx.FieldManager
 	c.recorder = ctx.Recorder
 
 	return c.queue, mustSync, nil
@@ -148,7 +152,7 @@ const (
 )
 
 func init() {
-	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, ControllerName).
 			For(&controller{}).
 			Complete()

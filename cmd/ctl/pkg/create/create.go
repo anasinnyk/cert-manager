@@ -22,7 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 
-	"github.com/jetstack/cert-manager/cmd/ctl/pkg/create/certificaterequest"
+	"github.com/cert-manager/cert-manager/cmd/ctl/pkg/create/certificaterequest"
 )
 
 func NewCmdCreate(ctx context.Context, ioStreams genericclioptions.IOStreams) *cobra.Command {
@@ -32,7 +32,7 @@ func NewCmdCreate(ctx context.Context, ioStreams genericclioptions.IOStreams) *c
 	return cmds
 }
 
-// Create a bare Create Command, without any subcommands
+// NewCmdCreateBare creates a bare Create Command, without any subcommands
 func NewCmdCreateBare() *cobra.Command {
 	return &cobra.Command{
 		Use:   "create",

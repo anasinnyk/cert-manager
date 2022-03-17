@@ -19,17 +19,18 @@ package venafi
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/util"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/framework/addon/venafi"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/featureset"
-	"github.com/jetstack/cert-manager/test/e2e/framework/util/errors"
-	"github.com/jetstack/cert-manager/test/e2e/suite/conformance/certificatesigningrequests"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/util"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/addon/venafi"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/featureset"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/util/errors"
+	"github.com/cert-manager/cert-manager/test/e2e/suite/conformance/certificatesigningrequests"
 )
 
 var _ = framework.ConformanceDescribe("CertificateSigningRequests", func() {
@@ -104,6 +105,11 @@ func (c *cloud) createIssuer(f *framework.Framework) string {
 	issuer, err = f.CertManagerClientSet.CertmanagerV1().Issuers(f.Namespace.Name).Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create issuer for venafi")
 
+	// wait for issuer to be ready
+	By("Waiting for Venafi Cloud Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return fmt.Sprintf("issuers.cert-manager.io/%s.%s", issuer.Namespace, issuer.Name)
 }
 
@@ -128,6 +134,11 @@ func (c *cloud) createClusterIssuer(f *framework.Framework) string {
 	issuer := c.Details().BuildClusterIssuer()
 	issuer, err = f.CertManagerClientSet.CertmanagerV1().ClusterIssuers().Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create issuer for venafi")
+
+	// wait for issuer to be ready
+	By("Waiting for Venafi Cloud Cluster Issuer to be Ready")
+	issuer, err = f.Helper().WaitClusterIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
 
 	return fmt.Sprintf("clusterissuers.cert-manager.io/%s", issuer.Name)
 }

@@ -22,8 +22,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	v1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
+	v1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 )
 
 type CertificateModifier func(*v1.Certificate)
@@ -71,6 +71,12 @@ func SetCertificateCommonName(commonName string) CertificateModifier {
 func SetCertificateIPs(ips ...string) CertificateModifier {
 	return func(crt *v1.Certificate) {
 		crt.Spec.IPAddresses = ips
+	}
+}
+
+func SetCertificateEmails(emails ...string) CertificateModifier {
+	return func(crt *v1.Certificate) {
+		crt.Spec.EmailAddresses = emails
 	}
 }
 
@@ -259,5 +265,11 @@ func CertificateRef(certName, certUID string) metav1.OwnerReference {
 func SetCertificateRevisionHistoryLimit(limit int32) CertificateModifier {
 	return func(crt *v1.Certificate) {
 		crt.Spec.RevisionHistoryLimit = &limit
+	}
+}
+
+func SetCertificateAdditionalOutputFormats(additionalOutputFormats ...v1.CertificateAdditionalOutputFormat) CertificateModifier {
+	return func(crt *v1.Certificate) {
+		crt.Spec.AdditionalOutputFormats = additionalOutputFormats
 	}
 }

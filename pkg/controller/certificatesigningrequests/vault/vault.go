@@ -31,14 +31,14 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/record"
 
-	internalvault "github.com/jetstack/cert-manager/internal/vault"
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/util"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
+	internalvault "github.com/cert-manager/cert-manager/internal/vault"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/util"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
 )
 
 const (
@@ -58,17 +58,20 @@ type Vault struct {
 
 	certClient    certificatesclient.CertificateSigningRequestInterface
 	clientBuilder internalvault.ClientBuilder
+
+	// fieldManager is the manager name used for the Apply operations.
+	fieldManager string
 }
 
 func init() {
-	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, CSRControllerName).
-			For(certificatesigningrequests.New(apiutil.IssuerVault, NewVault(ctx))).
+			For(certificatesigningrequests.New(apiutil.IssuerVault, NewVault)).
 			Complete()
 	})
 }
 
-func NewVault(ctx *controllerpkg.Context) *Vault {
+func NewVault(ctx *controllerpkg.Context) certificatesigningrequests.Signer {
 	return &Vault{
 		issuerOptions: ctx.IssuerOptions,
 		kclient:       ctx.Client,
@@ -76,6 +79,7 @@ func NewVault(ctx *controllerpkg.Context) *Vault {
 		recorder:      ctx.Recorder,
 		certClient:    ctx.Client.CertificatesV1().CertificateSigningRequests(),
 		clientBuilder: internalvault.New,
+		fieldManager:  ctx.FieldManager,
 	}
 }
 
@@ -95,7 +99,7 @@ func (v *Vault) Sign(ctx context.Context, csr *certificatesv1.CertificateSigning
 		log.Error(err, message)
 		v.recorder.Event(csr, corev1.EventTypeWarning, "SecretNotFound", message)
 		util.CertificateSigningRequestSetFailed(csr, "SecretNotFound", message)
-		_, err := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 		return err
 	}
 
@@ -112,7 +116,7 @@ func (v *Vault) Sign(ctx context.Context, csr *certificatesv1.CertificateSigning
 		log.Error(err, message)
 		v.recorder.Event(csr, corev1.EventTypeWarning, "ErrorParseDuration", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorParseDuration", message)
-		_, err := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 		return err
 	}
 
@@ -122,14 +126,14 @@ func (v *Vault) Sign(ctx context.Context, csr *certificatesv1.CertificateSigning
 		log.Error(err, message)
 		v.recorder.Event(csr, corev1.EventTypeWarning, "ErrorSigning", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorSigning", message)
-		_, err := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 		return err
 	}
 
 	log.V(logf.DebugLevel).Info("certificate issued")
 
 	csr.Status.Certificate = certPEM
-	csr, err = v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+	csr, err = util.UpdateOrApplyStatus(ctx, v.certClient, csr, "", v.fieldManager)
 	if err != nil {
 		message := "Error updating certificate"
 		v.recorder.Eventf(csr, corev1.EventTypeWarning, "ErrorUpdate", "%s: %s", message, err)

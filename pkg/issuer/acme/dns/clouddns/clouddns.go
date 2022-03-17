@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	logf "github.com/jetstack/cert-manager/pkg/logs"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
 
 	"github.com/go-logr/logr"
 
@@ -24,7 +24,7 @@ import (
 	"google.golang.org/api/dns/v1"
 	"google.golang.org/api/option"
 
-	"github.com/jetstack/cert-manager/pkg/issuer/acme/dns/util"
+	"github.com/cert-manager/cert-manager/pkg/issuer/acme/dns/util"
 )
 
 // DNSProvider is an implementation of the DNSProvider interface.
@@ -36,6 +36,7 @@ type DNSProvider struct {
 	log              logr.Logger
 }
 
+// NewDNSProvider returns a new DNSProvider Instance with configuration
 func NewDNSProvider(project string, saBytes []byte, dns01Nameservers []string, ambient bool, hostedZoneName string) (*DNSProvider, error) {
 	// project is a required field
 	if project == "" {

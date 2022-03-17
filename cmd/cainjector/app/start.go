@@ -29,16 +29,19 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	cmdutil "github.com/jetstack/cert-manager/cmd/util"
-	"github.com/jetstack/cert-manager/pkg/api"
-	"github.com/jetstack/cert-manager/pkg/controller/cainjector"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/util"
-	"github.com/jetstack/cert-manager/pkg/util/profiling"
+	cmdutil "github.com/cert-manager/cert-manager/cmd/util"
+	"github.com/cert-manager/cert-manager/pkg/api"
+	"github.com/cert-manager/cert-manager/pkg/controller/cainjector"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/pkg/util"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
+	"github.com/cert-manager/cert-manager/pkg/util/profiling"
 )
 
+// InjectorControllerOptions is a struct having injector controller options values
 type InjectorControllerOptions struct {
 	Namespace               string
 	LeaderElect             bool
@@ -60,6 +63,7 @@ type InjectorControllerOptions struct {
 	log logr.Logger
 }
 
+// AddFlags adds the various flags for injector controller options
 func (o *InjectorControllerOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.Namespace, "namespace", "", ""+
 		"If set, this limits the scope of cainjector to a single namespace. "+
@@ -84,10 +88,13 @@ func (o *InjectorControllerOptions) AddFlags(fs *pflag.FlagSet) {
 		"The duration the clients should wait between attempting acquisition and renewal "+
 		"of a leadership. This is only applicable if leader election is enabled.")
 
-	fs.BoolVar(&o.EnablePprof, "enable-profiling", cmdutil.DefaultEnableProfiling, "Enable Go profiler (pprof) should be run.")
+	fs.BoolVar(&o.EnablePprof, "enable-profiling", cmdutil.DefaultEnableProfiling, "Enable profiling for cainjector")
 	fs.StringVar(&o.PprofAddr, "profiler-address", cmdutil.DefaultProfilerAddr, "Address of the Go profiler (pprof) if enabled. This should never be exposed on a public interface.")
+
+	utilfeature.DefaultMutableFeatureGate.AddFlag(fs)
 }
 
+// NewInjectorControllerOptions returns a new InjectorControllerOptions
 func NewInjectorControllerOptions(out, errOut io.Writer) *InjectorControllerOptions {
 	o := &InjectorControllerOptions{
 		StdOut: out,
@@ -135,6 +142,7 @@ func (o InjectorControllerOptions) RunInjectorController(ctx context.Context) er
 		LeaderElectionNamespace:       o.LeaderElectionNamespace,
 		LeaderElectionID:              "cert-manager-cainjector-leader-election",
 		LeaderElectionReleaseOnCancel: true,
+		LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
 		LeaseDuration:                 &o.LeaseDuration,
 		RenewDeadline:                 &o.RenewDeadline,
 		RetryPeriod:                   &o.RetryPeriod,

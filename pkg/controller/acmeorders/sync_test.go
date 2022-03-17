@@ -30,16 +30,16 @@ import (
 	coretesting "k8s.io/client-go/testing"
 	fakeclock "k8s.io/utils/clock/testing"
 
-	accountstest "github.com/jetstack/cert-manager/pkg/acme/accounts/test"
-	acmecl "github.com/jetstack/cert-manager/pkg/acme/client"
-	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	testpkg "github.com/jetstack/cert-manager/pkg/controller/test"
-	schedulertest "github.com/jetstack/cert-manager/pkg/scheduler/test"
-	"github.com/jetstack/cert-manager/test/unit/gen"
+	accountstest "github.com/cert-manager/cert-manager/pkg/acme/accounts/test"
+	acmecl "github.com/cert-manager/cert-manager/pkg/acme/client"
+	cmacme "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	testpkg "github.com/cert-manager/cert-manager/pkg/controller/test"
+	schedulertest "github.com/cert-manager/cert-manager/pkg/scheduler/test"
+	"github.com/cert-manager/cert-manager/test/unit/gen"
 )
 
-func TestSyncHappyPath(t *testing.T) {
+func TestSync(t *testing.T) {
 	nowTime := time.Now()
 	nowMetaTime := metav1.NewTime(nowTime)
 	fixedClock := fakeclock.NewFakeClock(nowTime)
@@ -109,10 +109,48 @@ func TestSyncHappyPath(t *testing.T) {
 		},
 	}
 
+	erroredStatus := cmacme.OrderStatus{
+		State: cmacme.Errored,
+	}
+
+	erroredStatusWithDetail := cmacme.OrderStatus{
+		State:       cmacme.Errored,
+		FailureTime: &nowMetaTime,
+		URL:         "http://testurl.com/abcde",
+		FinalizeURL: "http://testurl.com/abcde/finalize",
+		Reason:      "Failed to finalize Order: 429 : some error",
+		Authorizations: []cmacme.ACMEAuthorization{
+			{
+				URL:          "http://authzurl",
+				Identifier:   "test.com",
+				InitialState: cmacme.Valid,
+				Challenges: []cmacme.ACMEChallenge{
+					{
+						URL:   "http://chalurl",
+						Token: "token",
+						Type:  "http-01",
+					},
+				},
+			},
+		},
+	}
+
+	acmeError429 := acmeapi.Error{
+		StatusCode: 429,
+		Detail:     "some error",
+	}
+	acmeError403 := acmeapi.Error{
+		StatusCode: 403,
+		Detail:     "some error",
+	}
+
 	testOrderPending := gen.OrderFrom(testOrder, gen.SetOrderStatus(pendingStatus))
 	testOrderInvalid := testOrderPending.DeepCopy()
 	testOrderInvalid.Status.State = cmacme.Invalid
 	testOrderInvalid.Status.FailureTime = &nowMetaTime
+	testOrderErrored := gen.OrderFrom(testOrder, gen.SetOrderStatus(erroredStatus))
+	testOrderErrored.Status.FailureTime = &nowMetaTime
+	testOrderErroredWithDetail := gen.OrderFrom(testOrderPending, gen.SetOrderStatus(erroredStatusWithDetail))
 	testOrderValid := testOrderPending.DeepCopy()
 	testOrderValid.Status.State = cmacme.Valid
 	// pem encoded word 'test'
@@ -508,6 +546,126 @@ rUCGwbCUDI0mxadJ3Bz4WxR6fyNpBK2yAinWEsikxqEt
 				},
 			},
 		},
+		"call FinalizeOrder and update the order state to 'errored' if finalize fails with a 4xx ACME error": {
+			order: gen.OrderFrom(testOrderErroredWithDetail, gen.SetOrderState(cmacme.Ready)),
+			builder: &testpkg.Builder{
+				CertManagerObjects: []runtime.Object{testIssuerHTTP01TestCom, gen.OrderFrom(testOrderErroredWithDetail, gen.SetOrderState(cmacme.Ready))},
+				ExpectedActions: []testpkg.Action{
+					testpkg.NewAction(coretesting.NewUpdateSubresourceAction(cmacme.SchemeGroupVersion.WithResource("orders"),
+						"status",
+						testOrderErroredWithDetail.Namespace, testOrderErroredWithDetail)),
+				},
+			},
+			acmeClient: &acmecl.FakeACME{
+				FakeGetOrder: func(_ context.Context, url string) (*acmeapi.Order, error) {
+					return testACMEOrderReady, nil
+				},
+				FakeCreateOrderCert: func(_ context.Context, url string, csr []byte, bundle bool) ([][]byte, string, error) {
+					return nil, "", &acmeError429
+				},
+				FakeHTTP01ChallengeResponse: func(s string) (string, error) {
+					// TODO: assert s = "token"
+					return "key", nil
+				},
+			},
+		},
+		"call FinalizeOrder, return error if finalize fails with an unspecified error": {
+			order: gen.OrderFrom(testOrderErroredWithDetail, gen.SetOrderState(cmacme.Ready)),
+			builder: &testpkg.Builder{
+				CertManagerObjects: []runtime.Object{testIssuerHTTP01TestCom, gen.OrderFrom(testOrderErroredWithDetail, gen.SetOrderState(cmacme.Ready))},
+				ExpectedActions:    []testpkg.Action{},
+			},
+			acmeClient: &acmecl.FakeACME{
+				FakeGetOrder: func(_ context.Context, url string) (*acmeapi.Order, error) {
+					return testACMEOrderReady, nil
+				},
+				FakeCreateOrderCert: func(_ context.Context, url string, csr []byte, bundle bool) ([][]byte, string, error) {
+					return nil, "", errors.New("some error")
+				},
+				FakeHTTP01ChallengeResponse: func(s string) (string, error) {
+					// TODO: assert s = "token"
+					return "key", nil
+				},
+			},
+			expectErr: true,
+		},
+		"call FinalizeOrder, recover if finalize fails because order is already finalized": {
+			order: testOrderReady,
+			builder: &testpkg.Builder{
+				CertManagerObjects: []runtime.Object{testIssuerHTTP01TestCom, testOrderReady, testAuthorizationChallengeValid},
+				ExpectedActions: []testpkg.Action{
+					testpkg.NewAction(coretesting.NewUpdateSubresourceAction(cmacme.SchemeGroupVersion.WithResource("orders"),
+						"status",
+						testOrderValid.Namespace, testOrderValid)),
+				},
+				ExpectedEvents: []string{
+					"Normal Complete Order completed successfully",
+				},
+			},
+			acmeClient: &acmecl.FakeACME{
+				FakeGetOrder: func(_ context.Context, url string) (*acmeapi.Order, error) {
+					return testACMEOrderValid, nil
+				},
+				FakeCreateOrderCert: func(_ context.Context, url string, csr []byte, bundle bool) ([][]byte, string, error) {
+					return nil, "", &acmeError403
+				},
+				FakeHTTP01ChallengeResponse: func(s string) (string, error) {
+					// TODO: assert s = "token"
+					return "key", nil
+				},
+				FakeFetchCert: func(_ context.Context, url string, bundle bool) ([][]byte, error) {
+					return [][]byte{[]byte("test")}, nil
+				},
+			},
+			expectErr: false,
+		},
+		"call FinalizeOrder, recover if finalize fails because order is already finalized and fetch alternate cert chain": {
+			order: testOrderReady,
+			builder: &testpkg.Builder{
+				CertManagerObjects: []runtime.Object{testIssuerHTTP01TestComPreferredChain, testOrderReady, testAuthorizationChallengeValid},
+				ExpectedActions: []testpkg.Action{
+					testpkg.NewAction(coretesting.NewUpdateSubresourceAction(cmacme.SchemeGroupVersion.WithResource("orders"),
+						"status",
+						testOrderValid.Namespace, testOrderValidAltCert)),
+				},
+				ExpectedEvents: []string{
+					"Normal Complete Order completed successfully",
+				},
+			},
+			acmeClient: &acmecl.FakeACME{
+				FakeGetOrder: func(_ context.Context, url string) (*acmeapi.Order, error) {
+					return testACMEOrderValid, nil
+				},
+				FakeCreateOrderCert: func(_ context.Context, url string, csr []byte, bundle bool) ([][]byte, string, error) {
+					return nil, "", &acmeError403
+				},
+				FakeHTTP01ChallengeResponse: func(s string) (string, error) {
+					// TODO: assert s = "token"
+					return "key", nil
+				},
+				FakeListCertAlternates: func(_ context.Context, url string) ([]string, error) {
+					return []string{"http://alturl"}, nil
+
+				},
+				FakeFetchCert: func(_ context.Context, url string, bundle bool) ([][]byte, error) {
+					if url != "http://alturl" {
+						// This bit just ensures that we
+						// call it from the correct
+						// place. This is the same URL
+						// that is returned from
+						// FakeCertAlternates that
+						// should have been called
+						// before this.
+						return nil, errors.New("Cert URL is incorrect")
+					}
+					if !bundle {
+						return nil, errors.New("Expecting to be called with bundle=true")
+					}
+					return [][]byte{rawTestCert.Bytes}, nil
+				},
+			},
+			expectErr: false,
+		},
 		"call FinalizeOrder fetch alternate cert chain": {
 			order: testOrderReady.DeepCopy(),
 			builder: &testpkg.Builder{
@@ -601,10 +759,18 @@ rUCGwbCUDI0mxadJ3Bz4WxR6fyNpBK2yAinWEsikxqEt
 			},
 			acmeClient: &acmecl.FakeACME{},
 		},
-		"do nothing if the order is failed": {
+		"do nothing if the order is invalid": {
 			order: testOrderInvalid,
 			builder: &testpkg.Builder{
 				CertManagerObjects: []runtime.Object{testIssuerHTTP01TestCom, testOrderInvalid},
+				ExpectedActions:    []testpkg.Action{},
+			},
+			acmeClient: &acmecl.FakeACME{},
+		},
+		"do nothing if the order is in errored state with no url or finalize url on status": {
+			order: testOrderErrored,
+			builder: &testpkg.Builder{
+				CertManagerObjects: []runtime.Object{testIssuerHTTP01TestCom, testOrderErrored},
 				ExpectedActions:    []testpkg.Action{},
 			},
 			acmeClient: &acmecl.FakeACME{},

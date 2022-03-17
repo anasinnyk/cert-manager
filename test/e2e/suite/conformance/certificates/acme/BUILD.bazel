@@ -3,7 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "go_default_library",
     srcs = ["acme.go"],
-    importpath = "github.com/jetstack/cert-manager/test/e2e/suite/conformance/certificates/acme",
+    importpath = "github.com/cert-manager/cert-manager/test/e2e/suite/conformance/certificates/acme",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/apis/acme/v1:go_default_library",
@@ -16,6 +16,7 @@ go_library(
         "@com_github_onsi_gomega//:go_default_library",
         "@io_k8s_api//core/v1:go_default_library",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:go_default_library",
+        "@io_k8s_sigs_gateway_api//apis/v1alpha2:go_default_library",
     ],
 )
 

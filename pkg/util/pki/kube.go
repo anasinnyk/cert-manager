@@ -23,9 +23,9 @@ import (
 
 	certificatesv1 "k8s.io/api/certificates/v1"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	experimentalapi "github.com/jetstack/cert-manager/pkg/apis/experimental/v1alpha1"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	experimentalapi "github.com/cert-manager/cert-manager/pkg/apis/experimental/v1alpha1"
 )
 
 // GenerateTemplateFromCertificateSigningRequest will create an
@@ -68,6 +68,7 @@ func DurationFromCertificateSigningRequest(csr *certificatesv1.CertificateSignin
 	return duration, nil
 }
 
+// BuildKeyUsagesKube returns a key usage and extended key usage of the x509 certificate
 func BuildKeyUsagesKube(usages []certificatesv1.KeyUsage) (x509.KeyUsage, []x509.ExtKeyUsage, error) {
 	var unk []certificatesv1.KeyUsage
 	if len(usages) == 0 {

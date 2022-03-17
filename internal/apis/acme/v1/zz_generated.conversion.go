@@ -24,16 +24,17 @@ package v1
 import (
 	unsafe "unsafe"
 
-	acme "github.com/jetstack/cert-manager/internal/apis/acme"
-	meta "github.com/jetstack/cert-manager/internal/apis/meta"
-	metav1 "github.com/jetstack/cert-manager/internal/apis/meta/v1"
-	v1 "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
-	apismetav1 "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
+	acme "github.com/cert-manager/cert-manager/internal/apis/acme"
+	meta "github.com/cert-manager/cert-manager/internal/apis/meta"
+	metav1 "github.com/cert-manager/cert-manager/internal/apis/meta/v1"
+	v1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	apismetav1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	pkgapismetav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	v1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
 func init() {
@@ -669,6 +670,7 @@ func Convert_acme_ACMEChallengeSolverHTTP01_To_v1_ACMEChallengeSolverHTTP01(in *
 func autoConvert_v1_ACMEChallengeSolverHTTP01GatewayHTTPRoute_To_acme_ACMEChallengeSolverHTTP01GatewayHTTPRoute(in *v1.ACMEChallengeSolverHTTP01GatewayHTTPRoute, out *acme.ACMEChallengeSolverHTTP01GatewayHTTPRoute, s conversion.Scope) error {
 	out.ServiceType = corev1.ServiceType(in.ServiceType)
 	out.Labels = *(*map[string]string)(unsafe.Pointer(&in.Labels))
+	out.ParentRefs = *(*[]v1alpha2.ParentRef)(unsafe.Pointer(&in.ParentRefs))
 	return nil
 }
 
@@ -680,6 +682,7 @@ func Convert_v1_ACMEChallengeSolverHTTP01GatewayHTTPRoute_To_acme_ACMEChallengeS
 func autoConvert_acme_ACMEChallengeSolverHTTP01GatewayHTTPRoute_To_v1_ACMEChallengeSolverHTTP01GatewayHTTPRoute(in *acme.ACMEChallengeSolverHTTP01GatewayHTTPRoute, out *v1.ACMEChallengeSolverHTTP01GatewayHTTPRoute, s conversion.Scope) error {
 	out.ServiceType = corev1.ServiceType(in.ServiceType)
 	out.Labels = *(*map[string]string)(unsafe.Pointer(&in.Labels))
+	out.ParentRefs = *(*[]v1alpha2.ParentRef)(unsafe.Pointer(&in.ParentRefs))
 	return nil
 }
 

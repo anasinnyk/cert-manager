@@ -30,20 +30,22 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/utils/clock"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	cmclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
-	cminformers "github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
-	cmlisters "github.com/jetstack/cert-manager/pkg/client/listers/certmanager/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/trigger/policies"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
-	"github.com/jetstack/cert-manager/pkg/util/predicate"
+	internalcertificates "github.com/cert-manager/cert-manager/internal/controller/certificates"
+	"github.com/cert-manager/cert-manager/internal/controller/certificates/policies"
+	"github.com/cert-manager/cert-manager/internal/controller/feature"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	cmclient "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned"
+	cminformers "github.com/cert-manager/cert-manager/pkg/client/informers/externalversions"
+	cmlisters "github.com/cert-manager/cert-manager/pkg/client/listers/certmanager/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
+	"github.com/cert-manager/cert-manager/pkg/util/predicate"
 )
 
 const (
@@ -65,6 +67,11 @@ type controller struct {
 	policyEvaluator policyEvaluatorFunc
 	// renewalTimeCalculator calculates renewal time of a certificate
 	renewalTimeCalculator certificates.RenewalTimeFunc
+
+	// fieldManager is the string which will be used as the Field Manager on
+	// fields created or edited by the cert-manager Kubernetes client during
+	// Apply API calls.
+	fieldManager string
 }
 
 // readyConditionFunc is custom function type that builds certificate's Ready condition
@@ -79,6 +86,7 @@ func NewController(
 	chain policies.Chain,
 	renewalTimeCalculator certificates.RenewalTimeFunc,
 	policyEvaluator policyEvaluatorFunc,
+	fieldManager string,
 ) (*controller, workqueue.RateLimitingInterface, []cache.InformerSynced) {
 	// create a queue used to queue up items to be processed
 	queue := workqueue.NewNamedRateLimitingQueue(workqueue.NewItemExponentialFailureRateLimiter(time.Second*1, time.Second*30), ControllerName)
@@ -121,6 +129,7 @@ func NewController(
 		},
 		policyEvaluator:       policyEvaluator,
 		renewalTimeCalculator: renewalTimeCalculator,
+		fieldManager:          fieldManager,
 	}, queue, mustSync
 }
 
@@ -139,7 +148,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 
 	crt, err := c.certificateLister.Certificates(namespace).Get(name)
 	if apierrors.IsNotFound(err) {
-		log.Error(err, "certificate not found for key")
+		log.V(logf.DebugLevel).Info("certificate not found for key", "error", err.Error())
 		return nil
 	}
 	if err != nil {
@@ -187,13 +196,33 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 		log.V(logf.DebugLevel).Info("updating status fields", "notAfter",
 			crt.Status.NotAfter, "notBefore", crt.Status.NotBefore, "renewalTime",
 			crt.Status.RenewalTime)
-		_, err = c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
-		if err != nil {
-			return err
-		}
+		return c.updateOrApplyStatus(ctx, crt)
 	}
 	return nil
+}
 
+// updateOrApplyStatus will update the controller status. If the
+// ServerSideApply feature is enabled, the managed fields will instead get
+// applied using the relevant Patch API call.
+func (c *controller) updateOrApplyStatus(ctx context.Context, crt *cmapi.Certificate) error {
+	if utilfeature.DefaultFeatureGate.Enabled(feature.ServerSideApply) {
+		var conditions []cmapi.CertificateCondition
+		if cond := apiutil.GetCertificateCondition(crt, cmapi.CertificateConditionReady); cond != nil {
+			conditions = []cmapi.CertificateCondition{*cond}
+		}
+		return internalcertificates.ApplyStatus(ctx, c.client, c.fieldManager, &cmapi.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Namespace: crt.Namespace, Name: crt.Name},
+			Status: cmapi.CertificateStatus{
+				NotAfter:    crt.Status.NotAfter,
+				NotBefore:   crt.Status.NotBefore,
+				RenewalTime: crt.Status.RenewalTime,
+				Conditions:  conditions,
+			},
+		})
+	} else {
+		_, err := c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
+		return err
+	}
 }
 
 // policyEvaluator builds Certificate's Ready condition using the result of policy chain evaluation
@@ -215,18 +244,6 @@ func policyEvaluator(chain policies.Chain, input policies.Input) cmapi.Certifica
 	}
 }
 
-// NewReadinessPolicyChain constructs an ordered chain of policies
-// that can be used to determine Certificate's Ready condition
-func NewReadinessPolicyChain(c clock.Clock) policies.Chain {
-	return policies.Chain{
-		policies.SecretDoesNotExist,
-		policies.SecretIsMissingData,
-		policies.SecretPublicKeysDiffer,
-		policies.CurrentCertificateRequestNotValidForSpec,
-		policies.CurrentCertificateHasExpired(c),
-	}
-}
-
 // controllerWrapper wraps the `controller` structure to make it implement
 // the controllerpkg.queueingController interface
 type controllerWrapper struct {
@@ -241,9 +258,10 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 		ctx.CMClient,
 		ctx.KubeSharedInformerFactory,
 		ctx.SharedInformerFactory,
-		NewReadinessPolicyChain(ctx.Clock),
+		policies.NewReadinessPolicyChain(ctx.Clock),
 		certificates.RenewalTime,
 		policyEvaluator,
+		ctx.FieldManager,
 	)
 	c.controller = ctrl
 
@@ -251,7 +269,7 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 }
 
 func init() {
-	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, ControllerName).
 			For(&controllerWrapper{}).
 			Complete()

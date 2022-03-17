@@ -17,6 +17,7 @@ limitations under the License.
 package options
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -25,36 +26,36 @@ import (
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/util/sets"
 
-	cmdutil "github.com/jetstack/cert-manager/cmd/util"
-	cm "github.com/jetstack/cert-manager/pkg/apis/certmanager"
-	challengescontroller "github.com/jetstack/cert-manager/pkg/controller/acmechallenges"
-	orderscontroller "github.com/jetstack/cert-manager/pkg/controller/acmeorders"
-	shimgatewaycontroller "github.com/jetstack/cert-manager/pkg/controller/certificate-shim/gateways"
-	shimingresscontroller "github.com/jetstack/cert-manager/pkg/controller/certificate-shim/ingresses"
-	cracmecontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/acme"
-	crapprovercontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/approver"
-	crcacontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/ca"
-	crselfsignedcontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/selfsigned"
-	crvaultcontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/vault"
-	crvenaficontroller "github.com/jetstack/cert-manager/pkg/controller/certificaterequests/venafi"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/issuing"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/keymanager"
-	certificatesmetricscontroller "github.com/jetstack/cert-manager/pkg/controller/certificates/metrics"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/readiness"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/requestmanager"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/revisionmanager"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/trigger"
-	csracmecontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/acme"
-	csrcacontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/ca"
-	csrselfsignedcontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/selfsigned"
-	csrvaultcontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/vault"
-	csrvenaficontroller "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/venafi"
-	clusterissuerscontroller "github.com/jetstack/cert-manager/pkg/controller/clusterissuers"
-	issuerscontroller "github.com/jetstack/cert-manager/pkg/controller/issuers"
-	"github.com/jetstack/cert-manager/pkg/feature"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/util"
-	utilfeature "github.com/jetstack/cert-manager/pkg/util/feature"
+	cmdutil "github.com/cert-manager/cert-manager/cmd/util"
+	"github.com/cert-manager/cert-manager/internal/controller/feature"
+	cm "github.com/cert-manager/cert-manager/pkg/apis/certmanager"
+	challengescontroller "github.com/cert-manager/cert-manager/pkg/controller/acmechallenges"
+	orderscontroller "github.com/cert-manager/cert-manager/pkg/controller/acmeorders"
+	shimgatewaycontroller "github.com/cert-manager/cert-manager/pkg/controller/certificate-shim/gateways"
+	shimingresscontroller "github.com/cert-manager/cert-manager/pkg/controller/certificate-shim/ingresses"
+	cracmecontroller "github.com/cert-manager/cert-manager/pkg/controller/certificaterequests/acme"
+	crapprovercontroller "github.com/cert-manager/cert-manager/pkg/controller/certificaterequests/approver"
+	crcacontroller "github.com/cert-manager/cert-manager/pkg/controller/certificaterequests/ca"
+	crselfsignedcontroller "github.com/cert-manager/cert-manager/pkg/controller/certificaterequests/selfsigned"
+	crvaultcontroller "github.com/cert-manager/cert-manager/pkg/controller/certificaterequests/vault"
+	crvenaficontroller "github.com/cert-manager/cert-manager/pkg/controller/certificaterequests/venafi"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates/issuing"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates/keymanager"
+	certificatesmetricscontroller "github.com/cert-manager/cert-manager/pkg/controller/certificates/metrics"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates/readiness"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates/requestmanager"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates/revisionmanager"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates/trigger"
+	csracmecontroller "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/acme"
+	csrcacontroller "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/ca"
+	csrselfsignedcontroller "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/selfsigned"
+	csrvaultcontroller "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/vault"
+	csrvenaficontroller "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/venafi"
+	clusterissuerscontroller "github.com/cert-manager/cert-manager/pkg/controller/clusterissuers"
+	issuerscontroller "github.com/cert-manager/cert-manager/pkg/controller/issuers"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/pkg/util"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
 )
 
 type ControllerOptions struct {
@@ -79,6 +80,8 @@ type ControllerOptions struct {
 	ACMEHTTP01SolverResourceRequestMemory string
 	ACMEHTTP01SolverResourceLimitsCPU     string
 	ACMEHTTP01SolverResourceLimitsMemory  string
+	// Allows specifying a list of custom nameservers to perform HTTP01 checks on.
+	ACMEHTTP01SolverNameservers []string
 
 	ClusterIssuerAmbientCredentials bool
 	IssuerAmbientCredentials        bool
@@ -232,6 +235,7 @@ func NewControllerOptions() *ControllerOptions {
 		DefaultIssuerKind:                 defaultTLSACMEIssuerKind,
 		DefaultIssuerGroup:                defaultTLSACMEIssuerGroup,
 		DefaultAutoCertificateAnnotations: defaultAutoCertificateAnnotations,
+		ACMEHTTP01SolverNameservers:       []string{},
 		DNS01RecursiveNameservers:         []string{},
 		DNS01RecursiveNameserversOnly:     defaultDNS01RecursiveNameserversOnly,
 		EnableCertificateOwnerRef:         defaultEnableCertificateOwnerRef,
@@ -298,6 +302,11 @@ func (s *ControllerOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.ACMEHTTP01SolverResourceLimitsMemory, "acme-http01-solver-resource-limits-memory", defaultACMEHTTP01SolverResourceLimitsMemory, ""+
 		"Defines the resource limits Memory size when spawning new ACME HTTP01 challenge solver pods.")
 
+	fs.StringSliceVar(&s.ACMEHTTP01SolverNameservers, "acme-http01-solver-nameservers",
+		[]string{}, "A list of comma separated dns server endpoints used for "+
+			"ACME HTTP01 check requests. This should be a list containing host and "+
+			"port, for example 8.8.8.8:53,8.8.4.4:53")
+
 	fs.BoolVar(&s.ClusterIssuerAmbientCredentials, "cluster-issuer-ambient-credentials", defaultClusterIssuerAmbientCredentials, ""+
 		"Whether a cluster-issuer may make use of ambient credentials for issuers. 'Ambient Credentials' are credentials drawn from the environment, metadata services, or local files which are not explicitly configured in the ClusterIssuer API object. "+
 		"When this flag is enabled, the following sources for credentials are also used: "+
@@ -350,11 +359,8 @@ func (s *ControllerOptions) AddFlags(fs *pflag.FlagSet) {
 }
 
 func (o *ControllerOptions) Validate() error {
-	switch o.DefaultIssuerKind {
-	case "Issuer":
-	case "ClusterIssuer":
-	default:
-		return fmt.Errorf("invalid default issuer kind: %v", o.DefaultIssuerKind)
+	if len(o.DefaultIssuerKind) == 0 {
+		return errors.New("the --default-issuer-kind flag must not be empty")
 	}
 
 	if o.KubernetesAPIBurst <= 0 {
@@ -369,7 +375,7 @@ func (o *ControllerOptions) Validate() error {
 		return fmt.Errorf("invalid value for kube-api-burst: %v must be higher or equal to kube-api-qps: %v", o.KubernetesAPIQPS, o.KubernetesAPIQPS)
 	}
 
-	for _, server := range o.DNS01RecursiveNameservers {
+	for _, server := range append(o.DNS01RecursiveNameservers, o.ACMEHTTP01SolverNameservers...) {
 		// ensure all servers have a port number
 		_, _, err := net.SplitHostPort(server)
 		if err != nil {

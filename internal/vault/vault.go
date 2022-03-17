@@ -34,8 +34,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 
-	v1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
+	v1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
 )
 
 var _ Interface = &Vault{}

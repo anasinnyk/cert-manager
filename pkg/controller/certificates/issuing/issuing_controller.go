@@ -35,19 +35,23 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	cmclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
-	cminformers "github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
-	cmlisters "github.com/jetstack/cert-manager/pkg/client/listers/certmanager/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/internal/secretsmanager"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	utilkube "github.com/jetstack/cert-manager/pkg/util/kube"
-	utilpki "github.com/jetstack/cert-manager/pkg/util/pki"
-	"github.com/jetstack/cert-manager/pkg/util/predicate"
+	internalcertificates "github.com/cert-manager/cert-manager/internal/controller/certificates"
+	"github.com/cert-manager/cert-manager/internal/controller/certificates/policies"
+	"github.com/cert-manager/cert-manager/internal/controller/feature"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	cmclient "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned"
+	cminformers "github.com/cert-manager/cert-manager/pkg/client/informers/externalversions"
+	cmlisters "github.com/cert-manager/cert-manager/pkg/client/listers/certmanager/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates/issuing/internal"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
+	utilkube "github.com/cert-manager/cert-manager/pkg/util/kube"
+	utilpki "github.com/cert-manager/cert-manager/pkg/util/pki"
+	"github.com/cert-manager/cert-manager/pkg/util/predicate"
 )
 
 const (
@@ -68,8 +72,20 @@ type controller struct {
 
 	client cmclient.Interface
 
-	// secretManager is used to create and update Secrets with certificate and key data
-	secretsManager *secretsmanager.SecretsManager
+	// secretsUpdateData is used by the SecretTemplate controller for
+	// re-reconciling Secrets where the SecretTemplate is not up to date with a
+	// Certificate's secret.
+	secretsUpdateData func(context.Context, *cmapi.Certificate, internal.SecretData) error
+
+	// postIssuancePolicyChain is the policies chain to ensure that all Secret
+	// metadata and output formats are kept are present and correct.
+	postIssuancePolicyChain policies.Chain
+
+	// fieldManager is the string which will be used as the Field Manager on
+	// fields created or edited by the cert-manager Kubernetes client during
+	// Apply API calls.
+	fieldManager string
+
 	// localTemporarySigner signs a certificate that is stored temporarily
 	localTemporarySigner localTemporarySignerFn
 }
@@ -83,6 +99,7 @@ func NewController(
 	recorder record.EventRecorder,
 	clock clock.Clock,
 	certificateControllerOptions controllerpkg.CertificateOptions,
+	fieldManager string,
 ) (*controller, workqueue.RateLimitingInterface, []cache.InformerSynced) {
 
 	// create a queue used to queue up items to be processed
@@ -117,10 +134,9 @@ func NewController(
 		certificateInformer.Informer().HasSynced,
 	}
 
-	secretsManager := secretsmanager.New(
-		kubeClient,
-		secretsInformer.Lister(),
-		certificateControllerOptions.EnableOwnerRef,
+	secretsManager := internal.NewSecretsManager(
+		kubeClient.CoreV1(), secretsInformer.Lister(),
+		fieldManager, certificateControllerOptions.EnableOwnerRef,
 	)
 
 	return &controller{
@@ -130,7 +146,9 @@ func NewController(
 		client:                   client,
 		recorder:                 recorder,
 		clock:                    clock,
-		secretsManager:           secretsManager,
+		secretsUpdateData:        secretsManager.UpdateData,
+		postIssuancePolicyChain:  policies.NewSecretPostIssuancePolicyChain(fieldManager),
+		fieldManager:             fieldManager,
 		localTemporarySigner:     certificates.GenerateLocallySignedTemporaryCertificate,
 	}, queue, mustSync
 }
@@ -149,7 +167,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 
 	crt, err := c.certificateLister.Certificates(namespace).Get(name)
 	if apierrors.IsNotFound(err) {
-		log.Error(err, "certificate not found for key")
+		log.V(logf.DebugLevel).Info("certificate not found for key", "error", err.Error())
 		return nil
 	}
 	if err != nil {
@@ -163,8 +181,10 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 		Type:   cmapi.CertificateConditionIssuing,
 		Status: cmmeta.ConditionTrue,
 	}) {
-		// Do nothing if an issuance is not in progress.
-		return nil
+		// If Certificate doesn't have Issuing=true condition then we should check
+		// to ensure all non-issuing related SecretData is correct on the
+		// Certificate's secret.
+		return c.ensureSecretData(ctx, log, crt)
 	}
 
 	if crt.Status.NextPrivateKeySecretName == nil ||
@@ -236,6 +256,24 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 		return nil
 	}
 
+	certIssuingCond := apiutil.GetCertificateCondition(crt, cmapi.CertificateConditionIssuing)
+	crReadyCond := apiutil.GetCertificateRequestCondition(req, cmapi.CertificateRequestConditionReady)
+	if certIssuingCond == nil {
+		// This should never happen
+		log.V(logf.ErrorLevel).Info("Certificate does not have an issuing condition")
+		return nil
+	}
+	// If the CertificateRequest for this revision failed before the
+	// Issuing condition was last updated on the Certificate, then it must be a
+	// failed CertificateRequest from the previous issuance for the same
+	// revision. Leave it to the certificate-requests controller to delete the
+	// CertificateRequest and create a new one.
+	if req.Status.FailureTime != nil &&
+		req.Status.FailureTime.Before(certIssuingCond.LastTransitionTime) && crReadyCond.Reason == cmapi.CertificateRequestReasonFailed {
+		log.V(logf.InfoLevel).Info("Found a failed CertificateRequest from previous issuance, waiting for it to be deleted...")
+		return nil
+	}
+
 	// Some issuers won't honor the "Denied=True" condition, and we don't want
 	// to break these issuers. To avoid breaking these issuers, we skip bubbling
 	// up the "Denied=True" condition from the certificate request object to the
@@ -246,8 +284,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 	// certificate request is "Denied=True" and that the issuer still proceeds
 	// to adding the "Ready" condition (to either true or false), then we
 	// consider that this issuer has ignored the "Denied" state.
-	cond := apiutil.GetCertificateRequestCondition(req, cmapi.CertificateRequestConditionReady)
-	if cond == nil {
+	if crReadyCond == nil {
 		if apiutil.CertificateRequestIsDenied(req) {
 			return c.failIssueCertificate(ctx, log, crt, apiutil.GetCertificateRequestCondition(req, cmapi.CertificateRequestConditionDenied))
 		}
@@ -258,7 +295,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 
 	// If the certificate request has failed, set the last failure time to now,
 	// and set the Issuing status condition to False with reason.
-	if cond.Reason == cmapi.CertificateRequestReasonFailed {
+	if crReadyCond.Reason == cmapi.CertificateRequestReasonFailed {
 		return c.failIssueCertificate(ctx, log, crt, apiutil.GetCertificateRequestCondition(req, cmapi.CertificateRequestConditionReady))
 	}
 
@@ -278,7 +315,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 
 	// If the CertificateRequest is valid and ready, verify its status and issue
 	// accordingly.
-	if cond.Reason == cmapi.CertificateRequestReasonIssued {
+	if crReadyCond.Reason == cmapi.CertificateRequestReasonIssued {
 		return c.issueCertificate(ctx, nextRevision, crt, req, pk)
 	}
 
@@ -290,7 +327,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 	}
 
 	// CertificateRequest is not in a final state so do nothing.
-	log.V(logf.DebugLevel).Info("CertificateRequest not in final state, waiting...", "reason", cond.Reason)
+	log.V(logf.DebugLevel).Info("CertificateRequest not in final state, waiting...", "reason", crReadyCond.Reason)
 	return nil
 }
 
@@ -311,8 +348,7 @@ func (c *controller) failIssueCertificate(ctx context.Context, log logr.Logger, 
 	crt = crt.DeepCopy()
 	apiutil.SetCertificateCondition(crt, crt.Generation, cmapi.CertificateConditionIssuing, cmmeta.ConditionFalse, reason, message)
 
-	_, err := c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
-	if err != nil {
+	if err := c.updateOrApplyStatus(ctx, crt, false); err != nil {
 		return err
 	}
 
@@ -334,14 +370,13 @@ func (c *controller) issueCertificate(ctx context.Context, nextRevision int, crt
 	if err != nil {
 		return err
 	}
-	secretData := secretsmanager.SecretData{
+	secretData := internal.SecretData{
 		PrivateKey:  pkData,
 		Certificate: req.Status.Certificate,
 		CA:          req.Status.CA,
 	}
 
-	err = c.secretsManager.UpdateData(ctx, crt, secretData)
-	if err != nil {
+	if err := c.secretsUpdateData(ctx, crt, secretData); err != nil {
 		return err
 	}
 
@@ -349,13 +384,14 @@ func (c *controller) issueCertificate(ctx context.Context, nextRevision int, crt
 	crt.Status.Revision = &nextRevision
 
 	// Remove Issuing status condition
+	// TODO @joshvanl: Once we move to only server-side apply API calls, this
+	// should be changed to setting the Issuing condition to False.
 	apiutil.RemoveCertificateCondition(crt, cmapi.CertificateConditionIssuing)
 
 	//Clear status.lastFailureTime (if set)
 	crt.Status.LastFailureTime = nil
 
-	_, err = c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
-	if err != nil {
+	if err := c.updateOrApplyStatus(ctx, crt, true); err != nil {
 		return err
 	}
 
@@ -363,6 +399,43 @@ func (c *controller) issueCertificate(ctx context.Context, nextRevision int, crt
 	c.recorder.Event(crt, corev1.EventTypeNormal, "Issuing", message)
 
 	return nil
+
+}
+
+// updateOrApplyStatus will update the controller status. If the
+// ServerSideApply feature is enabled, the managed fields will instead get
+// applied using the relevant Patch API call.
+// conditionRemove should be true if the Issuing condition has been removed by
+// this controller. If the ServerSideApply feature is enabled and condition
+// have been removed, the Issuing condition will be set to False before
+// applying.
+func (c *controller) updateOrApplyStatus(ctx context.Context, crt *cmapi.Certificate, conditionRemoved bool) error {
+	if utilfeature.DefaultFeatureGate.Enabled(feature.ServerSideApply) {
+		// TODO @joshvanl: Once we move to only server-side apply API calls,
+		// `conditionRemoved` can be removed and setting the Issuing condition to
+		// False can be moved to the `issueCertificate` func.
+		if conditionRemoved {
+			message := "The certificate has been successfully issued"
+			apiutil.SetCertificateCondition(crt, crt.Generation, cmapi.CertificateConditionIssuing, cmmeta.ConditionFalse, "Issued", message)
+		}
+
+		var conditions []cmapi.CertificateCondition
+		if cond := apiutil.GetCertificateCondition(crt, cmapi.CertificateConditionIssuing); cond != nil {
+			conditions = []cmapi.CertificateCondition{*cond}
+		}
+
+		return internalcertificates.ApplyStatus(ctx, c.client, c.fieldManager, &cmapi.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Namespace: crt.Namespace, Name: crt.Name},
+			Status: cmapi.CertificateStatus{
+				Revision:        crt.Status.Revision,
+				LastFailureTime: crt.Status.LastFailureTime,
+				Conditions:      conditions,
+			},
+		})
+	} else {
+		_, err := c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
+		return err
+	}
 }
 
 // controllerWrapper wraps the `controller` structure to make it implement
@@ -383,6 +456,7 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 		ctx.Recorder,
 		ctx.Clock,
 		ctx.CertificateOptions,
+		ctx.FieldManager,
 	)
 	c.controller = ctrl
 
@@ -390,7 +464,7 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 }
 
 func init() {
-	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, ControllerName).
 			For(&controllerWrapper{}).
 			Complete()

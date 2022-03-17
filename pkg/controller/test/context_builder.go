@@ -30,21 +30,22 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	kubeinformers "k8s.io/client-go/informers"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	coretesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/clock"
 	fakeclock "k8s.io/utils/clock/testing"
-	gwfake "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake"
-	gwinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions"
+	gwfake "sigs.k8s.io/gateway-api/pkg/client/clientset/gateway/versioned/fake"
+	gwinformers "sigs.k8s.io/gateway-api/pkg/client/informers/gateway/externalversions"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmfake "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/fake"
-	informers "github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
-	"github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/metrics"
-	"github.com/jetstack/cert-manager/pkg/util"
-	discoveryfake "github.com/jetstack/cert-manager/test/unit/discovery"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmfake "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned/fake"
+	informers "github.com/cert-manager/cert-manager/pkg/client/informers/externalversions"
+	"github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/pkg/metrics"
+	"github.com/cert-manager/cert-manager/pkg/util"
+	discoveryfake "github.com/cert-manager/cert-manager/test/unit/discovery"
 )
 
 func init() {
@@ -155,6 +156,13 @@ func (b *Builder) Init() {
 	// Fix the clock used in apiutil so that calls to set status conditions
 	// can be predictably tested
 	apiutil.Clock = b.Context.Clock
+}
+
+// InitWithRESTConfig() will call builder.Init(), then assign an initialised
+// RESTConfig with a `cert-manager/unit-test` User Agent.
+func (b *Builder) InitWithRESTConfig() {
+	b.Init()
+	b.RESTConfig = util.RestConfigWithUserAgent(new(rest.Config), "unit-testing")
 }
 
 func (b *Builder) FakeKubeClient() *kubefake.Clientset {

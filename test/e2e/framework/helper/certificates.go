@@ -27,12 +27,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	v1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	clientset "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
-	"github.com/jetstack/cert-manager/test/e2e/framework/log"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	v1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	clientset "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/log"
 )
 
 // WaitForCertificateToExist waits for the named certificate to exist and returns the certificate
@@ -162,6 +162,96 @@ func (h *Helper) WaitForCertificateNotReadyAndDoneIssuing(cert *cmapi.Certificat
 			return false
 		}
 
+		return true
+	}, timeout)
+}
+
+func (h *Helper) waitForIssuerCondition(client clientset.IssuerInterface, name string, check func(issuer *v1.Issuer) bool, timeout time.Duration) (*cmapi.Issuer, error) {
+	var issuer *v1.Issuer
+	pollErr := wait.PollImmediate(500*time.Millisecond, timeout, func() (bool, error) {
+		var err error
+		issuer, err = client.Get(context.TODO(), name, metav1.GetOptions{})
+		if nil != err {
+			issuer = nil
+			return false, fmt.Errorf("error getting Issuer %v: %v", name, err)
+		}
+		return check(issuer), nil
+	})
+
+	if pollErr != nil && issuer != nil {
+		log.Logf("Failed waiting for issuer %v :%v\n", name, pollErr.Error())
+
+		log.Logf("Issuer:\n")
+		h.describeCMObject(issuer)
+	}
+
+	return issuer, pollErr
+}
+
+// WaitIssuerReady waits for the Issuer resource to be in a Ready=True state
+// The Ready=True condition will be checked against the provided issuer to make sure its ready.
+func (h *Helper) WaitIssuerReady(issuer *cmapi.Issuer, timeout time.Duration) (*cmapi.Issuer, error) {
+	ready_true_condition := cmapi.IssuerCondition{
+		Type:   cmapi.IssuerConditionReady,
+		Status: cmmeta.ConditionTrue,
+	}
+
+	return h.waitForIssuerCondition(h.CMClient.CertmanagerV1().Issuers(issuer.Namespace), issuer.Name, func(issuer *v1.Issuer) bool {
+		if !apiutil.IssuerHasCondition(issuer, ready_true_condition) {
+			log.Logf(
+				"Expected Issuer %v condition %v=%v but it has: %v",
+				issuer.Name,
+				ready_true_condition.Type,
+				ready_true_condition.Status,
+				issuer.Status.Conditions,
+			)
+			return false
+		}
+		return true
+	}, timeout)
+}
+
+func (h *Helper) waitForClusterIssuerCondition(client clientset.ClusterIssuerInterface, name string, check func(issuer *v1.ClusterIssuer) bool, timeout time.Duration) (*cmapi.ClusterIssuer, error) {
+	var issuer *v1.ClusterIssuer
+	pollErr := wait.PollImmediate(500*time.Millisecond, timeout, func() (bool, error) {
+		var err error
+		issuer, err = client.Get(context.TODO(), name, metav1.GetOptions{})
+		if nil != err {
+			issuer = nil
+			return false, fmt.Errorf("error getting Issuer %v: %v", name, err)
+		}
+		return check(issuer), nil
+	})
+
+	if pollErr != nil && issuer != nil {
+		log.Logf("Failed waiting for issuer %v :%v\n", name, pollErr.Error())
+
+		log.Logf("Issuer:\n")
+		h.describeCMObject(issuer)
+	}
+
+	return issuer, pollErr
+}
+
+// WaitClusterIssuerReady waits for the Cluster Issuer resource to be in a Ready=True state
+// The Ready=True condition will be checked against the provided issuer to make sure its ready.
+func (h *Helper) WaitClusterIssuerReady(issuer *cmapi.ClusterIssuer, timeout time.Duration) (*cmapi.ClusterIssuer, error) {
+	ready_true_condition := cmapi.IssuerCondition{
+		Type:   cmapi.IssuerConditionReady,
+		Status: cmmeta.ConditionTrue,
+	}
+
+	return h.waitForClusterIssuerCondition(h.CMClient.CertmanagerV1().ClusterIssuers(), issuer.Name, func(issuer *v1.ClusterIssuer) bool {
+		if !apiutil.IssuerHasCondition(issuer, ready_true_condition) {
+			log.Logf(
+				"Expected Cluster Issuer %v condition %v=%v but it has: %v",
+				issuer.Name,
+				ready_true_condition.Type,
+				ready_true_condition.Status,
+				issuer.Status.Conditions,
+			)
+			return false
+		}
 		return true
 	}, timeout)
 }

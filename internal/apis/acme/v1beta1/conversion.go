@@ -19,18 +19,17 @@ package v1beta1
 import (
 	"k8s.io/apimachinery/pkg/conversion"
 
-	"github.com/jetstack/cert-manager/internal/apis/acme"
-	"github.com/jetstack/cert-manager/pkg/apis/acme/v1beta1"
+	"github.com/cert-manager/cert-manager/internal/apis/acme"
 )
 
 // Convert_acme_ACMEIssuer_To_v1beta1_ACMEIssuer is explicitly defined to avoid issues in conversion-gen
 // when referencing types in other API groups.
-func Convert_acme_ACMEIssuer_To_v1beta1_ACMEIssuer(in *acme.ACMEIssuer, out *v1beta1.ACMEIssuer, s conversion.Scope) error {
+func Convert_acme_ACMEIssuer_To_v1beta1_ACMEIssuer(in *acme.ACMEIssuer, out *ACMEIssuer, s conversion.Scope) error {
 	return autoConvert_acme_ACMEIssuer_To_v1beta1_ACMEIssuer(in, out, s)
 }
 
 // Convert_v1beta1_ACMEIssuer_To_acme_ACMEIssuer is explicitly defined to avoid issues in conversion-gen
 // when referencing types in other API groups.
-func Convert_v1beta1_ACMEIssuer_To_acme_ACMEIssuer(in *v1beta1.ACMEIssuer, out *acme.ACMEIssuer, s conversion.Scope) error {
+func Convert_v1beta1_ACMEIssuer_To_acme_ACMEIssuer(in *ACMEIssuer, out *acme.ACMEIssuer, s conversion.Scope) error {
 	return autoConvert_v1beta1_ACMEIssuer_To_acme_ACMEIssuer(in, out, s)
 }

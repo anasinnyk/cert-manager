@@ -22,18 +22,18 @@ import (
 	"testing"
 	"time"
 
-	logtest "github.com/go-logr/logr/testing"
+	logtesting "github.com/go-logr/logr/testing"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	coretesting "k8s.io/client-go/testing"
 	fakeclock "k8s.io/utils/clock/testing"
 
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	internaltest "github.com/jetstack/cert-manager/pkg/controller/certificates/internal/test"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/trigger/policies"
-	testpkg "github.com/jetstack/cert-manager/pkg/controller/test"
-	"github.com/jetstack/cert-manager/test/unit/gen"
+	"github.com/cert-manager/cert-manager/internal/controller/certificates/policies"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	testpkg "github.com/cert-manager/cert-manager/pkg/controller/test"
+	testcrypto "github.com/cert-manager/cert-manager/test/unit/crypto"
+	"github.com/cert-manager/cert-manager/test/unit/gen"
 )
 
 func Test_controller_ProcessItem(t *testing.T) {
@@ -42,7 +42,7 @@ func Test_controller_ProcessItem(t *testing.T) {
 
 	// We don't need to full bundle, just a simple CertificateRequest.
 	createCertificateRequestOrPanic := func(crt *cmapi.Certificate) *cmapi.CertificateRequest {
-		return internaltest.MustCreateCryptoBundle(t, crt, fixedClock).CertificateRequest
+		return testcrypto.MustCreateCryptoBundle(t, crt, fixedClock).CertificateRequest
 	}
 
 	tests := map[string]struct {
@@ -324,7 +324,7 @@ func Test_shouldBackoffReissuingOnFailure(t *testing.T) {
 
 	// We don't need to full bundle, just a simple CertificateRequest.
 	createCertificateRequestOrPanic := func(crt *cmapi.Certificate) *cmapi.CertificateRequest {
-		return internaltest.MustCreateCryptoBundle(t, crt, clock).CertificateRequest
+		return testcrypto.MustCreateCryptoBundle(t, crt, clock).CertificateRequest
 	}
 
 	tests := map[string]struct {
@@ -440,7 +440,7 @@ func Test_shouldBackoffReissuingOnFailure(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			gotBackoff, gotDelay := shouldBackoffReissuingOnFailure(logtest.TestLogger{T: t}, clock, test.givenCert, test.givenNextCR)
+			gotBackoff, gotDelay := shouldBackoffReissuingOnFailure(logtesting.NewTestLogger(t), clock, test.givenCert, test.givenNextCR)
 			assert.Equal(t, test.wantBackoff, gotBackoff)
 			assert.Equal(t, test.wantDelay, gotDelay)
 		})

@@ -26,24 +26,24 @@ import (
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	certificatesclient "k8s.io/client-go/kubernetes/typed/certificates/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/record"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	experimentalapi "github.com/jetstack/cert-manager/pkg/apis/experimental/v1alpha1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/util"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	cmerrors "github.com/jetstack/cert-manager/pkg/util/errors"
-	"github.com/jetstack/cert-manager/pkg/util/kube"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	experimentalapi "github.com/cert-manager/cert-manager/pkg/apis/experimental/v1alpha1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/util"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	cmerrors "github.com/cert-manager/cert-manager/pkg/util/errors"
+	"github.com/cert-manager/cert-manager/pkg/util/kube"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
 )
 
 const (
+	// CSRControllerName holds the controller name
 	CSRControllerName = "certificatesigningrequests-issuer-selfsigned"
 )
 
@@ -57,6 +57,9 @@ type SelfSigned struct {
 
 	certClient certificatesclient.CertificateSigningRequestInterface
 
+	// fieldManager is the manager name used for the Apply operations.
+	fieldManager string
+
 	recorder record.EventRecorder
 
 	// Used for testing to get reproducible resulting certificates
@@ -65,18 +68,20 @@ type SelfSigned struct {
 
 func init() {
 	// create certificate signing request controller for selfsigned issuer
-	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, CSRControllerName).
-			For(certificatesigningrequests.New(apiutil.IssuerSelfSigned, NewSelfSigned(ctx))).
+			For(certificatesigningrequests.New(apiutil.IssuerSelfSigned, NewSelfSigned)).
 			Complete()
 	})
 }
 
-func NewSelfSigned(ctx *controllerpkg.Context) *SelfSigned {
+// NewSelfSigned returns a new instance of SelfSigned type
+func NewSelfSigned(ctx *controllerpkg.Context) certificatesigningrequests.Signer {
 	return &SelfSigned{
 		issuerOptions: ctx.IssuerOptions,
 		secretsLister: ctx.KubeSharedInformerFactory.Core().V1().Secrets().Lister(),
 		certClient:    ctx.Client.CertificatesV1().CertificateSigningRequests(),
+		fieldManager:  ctx.FieldManager,
 		recorder:      ctx.Recorder,
 		signingFn:     pki.SignCertificate,
 	}
@@ -99,7 +104,7 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		log.Error(errors.New(message), "")
 		s.recorder.Event(csr, corev1.EventTypeWarning, "MissingAnnotation", message)
 		util.CertificateSigningRequestSetFailed(csr, "MissingAnnotation", message)
-		_, err := s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err := util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
@@ -111,7 +116,7 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		log.Error(err, message)
 		s.recorder.Event(csr, corev1.EventTypeWarning, "SecretNotFound", message)
 		util.CertificateSigningRequestSetFailed(csr, "SecretNotFound", message)
-		_, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
@@ -120,7 +125,7 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		log.Error(err, message)
 		s.recorder.Eventf(csr, corev1.EventTypeWarning, "ErrorParsingKey", "%s: %s", message, err)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorParsingKey", message)
-		_, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
@@ -130,7 +135,7 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		log.Error(err, message)
 		s.recorder.Eventf(csr, corev1.EventTypeWarning, "ErrorGettingSecret", "%s: %s", message, err)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorGettingSecret", message)
-		_, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
@@ -140,7 +145,7 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		log.Error(err, message)
 		s.recorder.Event(csr, corev1.EventTypeWarning, "ErrorGenerating", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorGenerating", message)
-		_, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
@@ -153,7 +158,7 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		log.Error(err, message)
 		s.recorder.Event(csr, corev1.EventTypeWarning, "ErrorPublicKey", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorPublicKey", message)
-		_, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
@@ -167,7 +172,7 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		log.Error(err, message)
 		s.recorder.Event(csr, corev1.EventTypeWarning, "ErrorKeyMatch", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorKeyMatch", message)
-		_, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
@@ -176,12 +181,12 @@ func (s *SelfSigned) Sign(ctx context.Context, csr *certificatesv1.CertificateSi
 		message := fmt.Sprintf("Error signing certificate: %s", err)
 		s.recorder.Event(csr, corev1.EventTypeWarning, "ErrorSigning", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorSigning", message)
-		_, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, certificatesv1.CertificateFailed, s.fieldManager)
 		return err
 	}
 
 	csr.Status.Certificate = certPEM
-	csr, err = s.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+	csr, err = util.UpdateOrApplyStatus(ctx, s.certClient, csr, "", s.fieldManager)
 	if err != nil {
 		message := "Error updating certificate"
 		s.recorder.Eventf(csr, corev1.EventTypeWarning, "ErrorUpdate", "%s: %s", message, err)

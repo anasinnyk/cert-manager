@@ -42,15 +42,15 @@ def install():
         name = "io_kubernetes_ingress-nginx_old",
         registry = "k8s.gcr.io",
         repository = "ingress-nginx/controller",
-        tag = "v0.48.1",
-        digest = "sha256:dcc2d529a9cb95408ba9896639382793fb84361ef43cee9195f264c321e6b638",
+        tag = "v0.49.3",
+        digest = "sha256:c47ed90d1685cb6e3b556353d7afb2aced2be7095066edfc90dd81f3e9014747"
     )
     container_pull(
         name = "io_kubernetes_ingress-nginx_new",
         registry = "k8s.gcr.io",
         repository = "ingress-nginx/controller",
-        tag = "v1.0.2",
-        digest = "sha256:8c0abb209aaef63631d1c85add422ca51848ccee2f87aea06558d37bda1c8e91",
+        tag = "v1.1.0",
+        digest = "sha256:7464dc90abfaa084204176bcc0728f182b0611849395787143f6854dc6c38c85"
     )
 
     container_pull(
@@ -66,7 +66,7 @@ def install():
         registry = "ghcr.io",
         repository = "kyverno/kyvernopre",
         tag = "v1.3.6",
-        digest = "sha256:e76fb71c59449bca1028724a88005652409b56efb90bbcdce56b0d083bda6568",
+        digest = "sha256:94fc7f204917a86dcdbc18977e843701854aa9f84c215adce36c26de2adf13df",
     )
 
     ## Fetch traefik for use during e2e tests.

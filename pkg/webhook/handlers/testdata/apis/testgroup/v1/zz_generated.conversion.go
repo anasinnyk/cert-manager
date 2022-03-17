@@ -24,7 +24,7 @@ package v1
 import (
 	unsafe "unsafe"
 
-	testgroup "github.com/jetstack/cert-manager/pkg/webhook/handlers/testdata/apis/testgroup"
+	testgroup "github.com/cert-manager/cert-manager/pkg/webhook/handlers/testdata/apis/testgroup"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -54,6 +54,7 @@ func autoConvert_v1_TestType_To_testgroup_TestType(in *TestType, out *testgroup.
 	out.TestField = in.TestField
 	out.TestFieldPtr = (*string)(unsafe.Pointer(in.TestFieldPtr))
 	out.TestFieldImmutable = in.TestFieldImmutable
+	out.TestDefaultingField = in.TestDefaultingField
 	return nil
 }
 
@@ -67,6 +68,7 @@ func autoConvert_testgroup_TestType_To_v1_TestType(in *testgroup.TestType, out *
 	out.TestField = in.TestField
 	out.TestFieldPtr = (*string)(unsafe.Pointer(in.TestFieldPtr))
 	out.TestFieldImmutable = in.TestFieldImmutable
+	out.TestDefaultingField = in.TestDefaultingField
 	return nil
 }
 

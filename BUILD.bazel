@@ -1,6 +1,8 @@
-# gazelle:prefix github.com/jetstack/cert-manager
+# gazelle:prefix github.com/cert-manager/cert-manager
 # gazelle:proto disable_global
 # gazelle:exclude docs/generated/reference/generate/json_swagger
+# gazelle:exclude bin
+# gazelle:exclude make
 
 load("@io_bazel_rules_docker//container:container.bzl", "container_bundle")
 load("@io_bazel_rules_docker//contrib:push-all.bzl", "docker_push")
@@ -73,16 +75,9 @@ filegroup(
         "//pkg/client/clientset/versioned:all-srcs",
         "//pkg/client/informers/externalversions:all-srcs",
         "//pkg/client/listers/acme/v1:all-srcs",
-        "//pkg/client/listers/acme/v1alpha2:all-srcs",
-        "//pkg/client/listers/acme/v1alpha3:all-srcs",
-        "//pkg/client/listers/acme/v1beta1:all-srcs",
         "//pkg/client/listers/certmanager/v1:all-srcs",
-        "//pkg/client/listers/certmanager/v1alpha2:all-srcs",
-        "//pkg/client/listers/certmanager/v1alpha3:all-srcs",
-        "//pkg/client/listers/certmanager/v1beta1:all-srcs",
         "//pkg/controller:all-srcs",
         "//pkg/ctl:all-srcs",
-        "//pkg/feature:all-srcs",
         "//pkg/issuer:all-srcs",
         "//pkg/logs:all-srcs",
         "//pkg/metrics:all-srcs",
@@ -95,6 +90,7 @@ filegroup(
         "//test/internal/apiserver:all-srcs",
         "//test/internal/util:all-srcs",
         "//test/unit/coreclients:all-srcs",
+        "//test/unit/crypto:all-srcs",
         "//test/unit/discovery:all-srcs",
         "//test/unit/gen:all-srcs",
         "//test/unit/listers:all-srcs",

@@ -23,21 +23,24 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	networkingv1beta1 "k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	"github.com/jetstack/cert-manager/pkg/util"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/featureset"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/validation"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/validation/certificates"
-	e2eutil "github.com/jetstack/cert-manager/test/e2e/util"
+	"github.com/cert-manager/cert-manager/internal/controller/feature"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	"github.com/cert-manager/cert-manager/pkg/util"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/featureset"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/validation"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/validation/certificates"
+	e2eutil "github.com/cert-manager/cert-manager/test/e2e/util"
 )
 
 // Define defines simple conformance tests that can be run against any issuer type.
@@ -69,10 +72,9 @@ func (s *Suite) Define() {
 				sharedIPAddress = f.Config.Addons.ACMEServer.IngressIP
 			case "Gateway":
 				sharedIPAddress = f.Config.Addons.ACMEServer.GatewayIP
+				framework.RequireFeatureGate(f, utilfeature.DefaultFeatureGate, feature.ExperimentalGatewayAPISupport)
 			}
 		})
-
-		By("Running test suite with the following unsupported features: " + s.UnsupportedFeatures.String())
 
 		s.it(f, "should issue a basic, defaulted certificate for a single distinct DNS Name", func(issuerRef cmmeta.ObjectReference) {
 			testCertificate := &cmapi.Certificate{
@@ -784,6 +786,8 @@ func (s *Suite) Define() {
 		})
 
 		s.it(f, "Creating a Gateway with annotations for issuerRef and other Certificate fields", func(issuerRef cmmeta.ObjectReference) {
+			framework.RequireFeatureGate(f, utilfeature.DefaultFeatureGate, feature.ExperimentalGatewayAPISupport)
+
 			name := "testcert-gateway"
 			secretName := "testcert-gateway-tls"
 			domain := e2eutil.RandomSubdomain(s.DomainSuffix)
@@ -791,7 +795,7 @@ func (s *Suite) Define() {
 			renewBefore := time.Hour * 111
 
 			By("Creating a Gateway with annotations for issuerRef and other Certificate fields")
-			gw, route := e2eutil.NewGateway(name, f.Namespace.Name, secretName, map[string]string{
+			gw := e2eutil.NewGateway(name, f.Namespace.Name, secretName, map[string]string{
 				"cert-manager.io/issuer":       issuerRef.Name,
 				"cert-manager.io/issuer-kind":  issuerRef.Kind,
 				"cert-manager.io/issuer-group": issuerRef.Group,
@@ -800,15 +804,13 @@ func (s *Suite) Define() {
 				"cert-manager.io/renew-before": renewBefore.String(),
 			}, domain)
 
-			gw, err := f.GWClientSet.NetworkingV1alpha1().Gateways(f.Namespace.Name).Create(context.TODO(), gw, metav1.CreateOptions{})
-			Expect(err).NotTo(HaveOccurred())
-			_, err = f.GWClientSet.NetworkingV1alpha1().HTTPRoutes(f.Namespace.Name).Create(context.TODO(), route, metav1.CreateOptions{})
+			gw, err := f.GWClientSet.GatewayV1alpha2().Gateways(f.Namespace.Name).Create(context.TODO(), gw, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
 			// XXX(Mael): the CertificateRef seems to contain the Gateway name
 			// "testcert-gateway" instead of the secretName
 			// "testcert-gateway-tls".
-			certName := gw.Spec.Listeners[0].TLS.CertificateRef.Name
+			certName := string(gw.Spec.Listeners[0].TLS.CertificateRefs[0].Name)
 
 			By("Waiting for the Certificate to exist...")
 			cert, err := f.Helper().WaitForCertificateToExist(f.Namespace.Name, certName, time.Minute)
@@ -818,7 +820,7 @@ func (s *Suite) Define() {
 			cert, err = f.Helper().WaitForCertificateReadyAndDoneIssuing(cert, time.Minute*5)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify that the ingres-shim has translated all the supplied
+			// Verify that the gateway-shim has translated all the supplied
 			// annotations into equivalent Certificate field values
 			By("Validating the created Certificate")
 			Expect(cert.Spec.DNSNames).To(ConsistOf(domain))
@@ -884,11 +886,21 @@ func (s *Suite) Define() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Updating the Certificate after having added an additional dnsName")
-			testCertificate = testCertificate.DeepCopy() // DeepCopy before updating
 			newDNSName := e2eutil.RandomSubdomain(s.DomainSuffix)
-			testCertificate.Spec.DNSNames = append(testCertificate.Spec.DNSNames, newDNSName)
+			retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				err = f.CRClient.Get(context.Background(), types.NamespacedName{Name: testCertificate.Name, Namespace: testCertificate.Namespace}, testCertificate)
+				if err != nil {
+					return err
+				}
 
-			err = f.CRClient.Update(context.TODO(), testCertificate)
+				testCertificate.Spec.DNSNames = append(testCertificate.Spec.DNSNames, newDNSName)
+				err = f.CRClient.Update(context.Background(), testCertificate)
+				if err != nil {
+					return err
+				}
+				return nil
+			})
+
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for the Certificate Ready condition to be updated")

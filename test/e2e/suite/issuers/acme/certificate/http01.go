@@ -35,17 +35,17 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
 
-	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
-	v1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/featureset"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/validation"
-	"github.com/jetstack/cert-manager/test/e2e/framework/log"
-	. "github.com/jetstack/cert-manager/test/e2e/framework/matcher"
-	"github.com/jetstack/cert-manager/test/e2e/util"
-	e2eutil "github.com/jetstack/cert-manager/test/e2e/util"
-	"github.com/jetstack/cert-manager/test/unit/gen"
+	cmacme "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	v1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/featureset"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/validation"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/log"
+	. "github.com/cert-manager/cert-manager/test/e2e/framework/matcher"
+	"github.com/cert-manager/cert-manager/test/e2e/util"
+	e2eutil "github.com/cert-manager/cert-manager/test/e2e/util"
+	"github.com/cert-manager/cert-manager/test/unit/gen"
 )
 
 var _ = framework.CertManagerDescribe("ACME Certificate (HTTP01)", func() {
@@ -61,7 +61,7 @@ var _ = framework.CertManagerDescribe("ACME Certificate (HTTP01)", func() {
 	fixedIngressName := "testingress"
 
 	// ACME Issuer does not return a ca.crt. See:
-	// https://github.com/jetstack/cert-manager/issues/1571
+	// https://github.com/cert-manager/cert-manager/issues/1571
 	unsupportedFeatures := featureset.NewFeatureSet(featureset.SaveCAToSecret)
 	validations := validation.CertificateSetForUnsupportedFeatureSet(unsupportedFeatures)
 
@@ -137,7 +137,7 @@ var _ = framework.CertManagerDescribe("ACME Certificate (HTTP01)", func() {
 		certClient := f.CertManagerClientSet.CertmanagerV1().Certificates(f.Namespace.Name)
 
 		By("Creating a failing Certificate")
-		// In "devel/addon/pebble/chart/templates/configmap.yaml"
+		// In "make/config/pebble/chart/templates/configmap.yaml"
 		// the "google.com" domain is configured in the pebble blocklist.
 		cert := gen.Certificate(certificateName,
 			gen.SetCertificateSecretName(certificateSecretName),
@@ -215,7 +215,7 @@ var _ = framework.CertManagerDescribe("ACME Certificate (HTTP01)", func() {
 
 	It("should fail to obtain a certificate for a blocked ACME dns name", func() {
 		By("Creating a Certificate")
-		// In "devel/addon/pebble/chart/templates/configmap.yaml"
+		// In "make/config/pebble/chart/templates/configmap.yaml"
 		// the "google.com" domain is configured in the pebble blocklist.
 		cert := gen.Certificate(certificateName,
 			gen.SetCertificateSecretName(certificateSecretName),

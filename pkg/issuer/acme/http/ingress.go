@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,9 +29,17 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 
-	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
-	"github.com/jetstack/cert-manager/pkg/issuer/acme/http/solver"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
+	cmacme "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	"github.com/cert-manager/cert-manager/pkg/issuer/acme/http/solver"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+)
+
+const (
+	// annotationIngressClass is the well-known annotation key
+	// for specifying ingress classes. It is currently not specified
+	// in the networking/v1 package, so it is duplicated here
+	// to avoid an extra import of networking/v1beta1.
+	annotationIngressClass = "kubernetes.io/ingress.class"
 )
 
 // getIngressesForChallenge returns a list of Ingresses that were created to solve
@@ -137,10 +146,6 @@ func buildIngressResource(ch *cmacme.Challenge, svcName string) (*networkingv1.I
 	if err != nil {
 		return nil, err
 	}
-	var ingClass *string
-	if http01IngressCfg.Class != nil {
-		ingClass = http01IngressCfg.Class
-	}
 
 	podLabels := podLabels(ch)
 
@@ -148,6 +153,15 @@ func buildIngressResource(ch *cmacme.Challenge, svcName string) (*networkingv1.I
 
 	// TODO: Figure out how to remove this without breaking users who depend on it.
 	ingAnnotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = "0.0.0.0/0,::/0"
+
+	// Use the Ingress Class annotation defined in networkingv1beta1 even though our Ingress objects
+	// are networkingv1, for maximum compatibility with all Ingress controllers.
+	// if the `kubernetes.io/ingress.class` annotation is present, it takes precedence over the
+	// `spec.IngressClassName` field.
+	// See discussion in https://github.com/cert-manager/cert-manager/issues/4537.
+	if http01IngressCfg.Class != nil {
+		ingAnnotations[annotationIngressClass] = *http01IngressCfg.Class
+	}
 
 	ingPathToAdd := ingressPath(ch.Spec.Token, svcName)
 
@@ -165,7 +179,8 @@ func buildIngressResource(ch *cmacme.Challenge, svcName string) (*networkingv1.I
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(ch, challengeGvk)},
 		},
 		Spec: networkingv1.IngressSpec{
-			IngressClassName: ingClass,
+			// https://github.com/cert-manager/cert-manager/issues/4537
+			IngressClassName: nil,
 			Rules: []networkingv1.IngressRule{
 				{
 					Host: httpHost,
@@ -201,6 +216,11 @@ func (s *Solver) mergeIngressObjectMetaWithIngressResourceTemplate(ingress *netw
 	}
 
 	for k, v := range ingressTempl.Annotations {
+		// check if the user set the whitelist-source-range annotation in the template
+		annotation := k[strings.LastIndex(k, "/")+1:]
+		if annotation == "whitelist-source-range" {
+			delete(ingress.Annotations, "nginx.ingress.kubernetes.io/whitelist-source-range")
+		}
 		ingress.Annotations[k] = v
 	}
 

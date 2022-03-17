@@ -22,9 +22,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jetstack/cert-manager/cmd/util"
-	"github.com/jetstack/cert-manager/pkg/issuer/acme/http/solver"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/cmd/util"
+	"github.com/cert-manager/cert-manager/pkg/issuer/acme/http/solver"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
 )
 
 func NewACMESolverCommand(stopCh <-chan struct{}) *cobra.Command {
@@ -35,7 +35,7 @@ func NewACMESolverCommand(stopCh <-chan struct{}) *cobra.Command {
 		Short: "HTTP server used to solve ACME challenges.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rootCtx := util.ContextWithStopCh(context.Background(), stopCh)
-			rootCtx = logf.NewContext(rootCtx, nil, "acmesolver")
+			rootCtx = logf.NewContext(rootCtx, logf.Log, "acmesolver")
 			log := logf.FromContext(rootCtx)
 
 			completedCh := make(chan struct{})

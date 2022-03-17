@@ -30,20 +30,22 @@ else
   exit 0
 fi
 
-module_name="github.com/jetstack/cert-manager"
+module_name="github.com/cert-manager/cert-manager"
 
 # Generate deepcopy functions for all internal and external APIs
 deepcopy_inputs=(
-  pkg/apis/certmanager/v1alpha2 \
-  pkg/apis/certmanager/v1alpha3 \
-  pkg/apis/certmanager/v1beta1 \
+  internal/apis/certmanager/v1alpha2 \
+  internal/apis/certmanager/v1alpha3 \
+  internal/apis/certmanager/v1beta1 \
   pkg/apis/certmanager/v1 \
   internal/apis/certmanager \
-  pkg/apis/acme/v1alpha2 \
-  pkg/apis/acme/v1alpha3 \
-  pkg/apis/acme/v1beta1 \
+  internal/apis/acme/v1alpha2 \
+  internal/apis/acme/v1alpha3 \
+  internal/apis/acme/v1beta1 \
   pkg/apis/acme/v1 \
   internal/apis/acme \
+  pkg/apis/config/webhook/v1alpha1 \
+  internal/apis/config/webhook \
   pkg/apis/meta/v1 \
   internal/apis/meta \
   pkg/webhook/handlers/testdata/apis/testgroup/v2 \
@@ -56,13 +58,7 @@ client_subpackage="pkg/client"
 client_package="${module_name}/${client_subpackage}"
 # Generate clientsets, listers and informers for user-facing API types
 client_inputs=(
-  pkg/apis/certmanager/v1alpha2 \
-  pkg/apis/certmanager/v1alpha3 \
-  pkg/apis/certmanager/v1beta1 \
   pkg/apis/certmanager/v1 \
-  pkg/apis/acme/v1alpha2 \
-  pkg/apis/acme/v1alpha3 \
-  pkg/apis/acme/v1beta1 \
   pkg/apis/acme/v1 \
 )
 
@@ -76,6 +72,7 @@ defaulter_inputs=(
   internal/apis/acme/v1alpha3 \
   internal/apis/acme/v1beta1 \
   internal/apis/acme/v1 \
+  internal/apis/config/webhook/v1alpha1 \
   internal/apis/meta/v1 \
   pkg/webhook/handlers/testdata/apis/testgroup/v2 \
   pkg/webhook/handlers/testdata/apis/testgroup/v1 \
@@ -91,6 +88,7 @@ conversion_inputs=(
   internal/apis/acme/v1alpha3 \
   internal/apis/acme/v1beta1 \
   internal/apis/acme/v1 \
+  internal/apis/config/webhook/v1alpha1 \
   internal/apis/meta/v1 \
   pkg/webhook/handlers/testdata/apis/testgroup/v2 \
   pkg/webhook/handlers/testdata/apis/testgroup/v1 \
@@ -107,28 +105,7 @@ conversiongen=$PWD/$7
 
 shift 7
 
-fake_gopath=""
-fake_repopath=""
-ensure-in-gopath() {
-  export GOROOT=$go_sdk
-
-  fake_gopath=$(mktemp -d -t codegen.gopath.XXXX)
-
-  fake_repopath=$fake_gopath/src/github.com/jetstack/cert-manager
-  mkdir -p "$fake_repopath"
-  cp -R "$BUILD_WORKSPACE_DIRECTORY/." "$fake_repopath"
-
-  export GOPATH=$fake_gopath
-  cd "$fake_repopath"
-  echo "Created fake GOPATH to run code generators in"
-}
-
-cleanup_gopath() {
-  export GO111MODULE=off
-  "$go" clean --modcache
-  rm -rf "$fake_gopath" || true
-}
-trap cleanup_gopath EXIT
+export GOROOT=$go_sdk
 
 # clean will delete files matching name in path.
 #
@@ -153,24 +130,6 @@ mkcp() {
 # Export mkcp for use in sub-shells
 export -f mkcp
 
-copyfiles() {
-  # Don't copy data if the workspace directory is already within the GOPATH
-  if [ "${BUILD_WORKSPACE_DIRECTORY:0:${#GOPATH}}" = "$GOPATH" ]; then
-    return 0
-  fi
-
-  path=$1
-  name=$2
-  if [[ ! -d "$path" ]]; then
-    return 0
-  fi
-  (
-    cd "$GOPATH/src/$module_name/$path"
-
-    find "." -name "$name" -exec bash -c "mkcp {} \"$BUILD_WORKSPACE_DIRECTORY/$path/{}\"" \;
-  )
-}
-
 gen-deepcopy() {
   clean pkg/apis 'zz_generated.deepcopy.go'
   clean pkg/acme/webhook/apis 'zz_generated.deepcopy.go'
@@ -182,10 +141,9 @@ gen-deepcopy() {
     --go-header-file hack/boilerplate/boilerplate.generatego.txt \
     --input-dirs "$joined" \
     --output-file-base zz_generated.deepcopy \
-    --bounding-dirs "${module_name}"
-  for dir in "${deepcopy_inputs[@]}"; do
-    copyfiles "$dir" "zz_generated.deepcopy.go"
-  done
+    --trim-path-prefix="$module_name" \
+    --bounding-dirs "${module_name}" \
+    --output-base ./
 }
 
 gen-clientsets() {
@@ -198,8 +156,9 @@ gen-clientsets() {
     --clientset-name versioned \
     --input-base "" \
     --input "$joined" \
-    --output-package "${client_package}"/clientset
-  copyfiles "${client_subpackage}/clientset" "*.go"
+    --trim-path-prefix="$module_name" \
+    --output-package "${client_package}"/clientset \
+    --output-base ./
 }
 
 gen-listers() {
@@ -210,8 +169,9 @@ gen-listers() {
   "$listergen" \
     --go-header-file hack/boilerplate/boilerplate.generatego.txt \
     --input-dirs "$joined" \
-    --output-package "${client_package}"/listers
-  copyfiles "${client_subpackage}/listers" "*.go"
+    --trim-path-prefix="$module_name" \
+    --output-package "${client_package}"/listers \
+    --output-base ./
 }
 
 gen-informers() {
@@ -224,8 +184,9 @@ gen-informers() {
     --input-dirs "$joined" \
     --versioned-clientset-package "${client_package}"/clientset/versioned \
     --listers-package "${client_package}"/listers \
-    --output-package "${client_package}"/informers
-  copyfiles "${client_subpackage}/informers" "*.go"
+    --trim-path-prefix="$module_name" \
+    --output-package "${client_package}"/informers \
+    --output-base ./
 }
 
 gen-defaulters() {
@@ -237,10 +198,9 @@ gen-defaulters() {
   "$defaultergen" \
     --go-header-file hack/boilerplate/boilerplate.generatego.txt \
     --input-dirs "$joined" \
-    -O zz_generated.defaults
-  for dir in "${defaulter_inputs[@]}"; do
-    copyfiles "$dir" "zz_generated.defaults.go"
-  done
+    --trim-path-prefix="$module_name" \
+    -O zz_generated.defaults \
+    --output-base ./
 }
 
 gen-conversions() {
@@ -249,9 +209,9 @@ gen-conversions() {
   echo "Generating conversion functions..." >&2
 
   CONVERSION_EXTRA_PEER_PKGS=(
-    github.com/jetstack/cert-manager/internal/apis/meta \
-    github.com/jetstack/cert-manager/internal/apis/meta/v1 \
-    github.com/jetstack/cert-manager/pkg/apis/meta/v1
+    github.com/cert-manager/cert-manager/internal/apis/meta \
+    github.com/cert-manager/cert-manager/internal/apis/meta/v1 \
+    github.com/cert-manager/cert-manager/pkg/apis/meta/v1
   )
   CONVERSION_PKGS=( "${conversion_inputs[@]/#/$module_name/}" )
 
@@ -260,24 +220,13 @@ gen-conversions() {
       --extra-peer-dirs $( IFS=$','; echo "${CONVERSION_EXTRA_PEER_PKGS[*]}" ) \
       --extra-dirs $( IFS=$','; echo "${CONVERSION_PKGS[*]}" ) \
       --input-dirs $( IFS=$','; echo "${CONVERSION_PKGS[*]}" ) \
-      -O zz_generated.conversion
-
-  # copy into source folder
-  for dir in "${conversion_inputs[@]}"; do
-    copyfiles "$dir" "zz_generated.conversion.go"
-  done
+      --trim-path-prefix="$module_name" \
+      -O zz_generated.conversion \
+      --output-base ./
 }
 
 runfiles="$(pwd)"
-export GO111MODULE=off
-ensure-in-gopath
-old=${GOCACHE:-}
-export GOCACHE=$(mktemp -d -t codegen.gocache.XXXX)
-export GO111MODULE=on
-export GOSUMDB=sum.golang.org
-"$go_sdk/bin/go" mod vendor
-export GO111MODULE=off
-export GOCACHE=$old
+cd "$BUILD_WORKSPACE_DIRECTORY"
 
 gen-deepcopy
 gen-clientsets
@@ -287,6 +236,5 @@ gen-defaulters
 gen-conversions
 
 ## Call update-bazel
-export GO111MODULE=on
 cd "$runfiles"
 "$@"

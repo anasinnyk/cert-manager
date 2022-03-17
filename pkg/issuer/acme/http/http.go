@@ -31,15 +31,14 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	k8snet "k8s.io/utils/net"
-	gwapilisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1alpha1"
+	gwapilisters "sigs.k8s.io/gateway-api/pkg/client/listers/gateway/apis/v1alpha2"
 
-	"github.com/jetstack/cert-manager/internal/ingress"
-	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
-	v1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	"github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/issuer/acme/http/solver"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	pkgutil "github.com/jetstack/cert-manager/pkg/util"
+	"github.com/cert-manager/cert-manager/internal/ingress"
+	cmacme "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	v1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	"github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/issuer/acme/http/solver"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
 )
 
 const (
@@ -48,6 +47,8 @@ const (
 	HTTP01Timeout = time.Minute * 15
 	// acmeSolverListenPort is the port acmesolver should listen on
 	acmeSolverListenPort = 8089
+
+	loggerName = "http01"
 )
 
 var (
@@ -68,7 +69,7 @@ type Solver struct {
 	requiredPasses   int
 }
 
-type reachabilityTest func(ctx context.Context, url *url.URL, key string) error
+type reachabilityTest func(ctx context.Context, url *url.URL, key string, dnsServers []string, userAgent string) error
 
 // NewSolver returns a new ACME HTTP01 solver for the given *controller.Context.
 func NewSolver(ctx *controller.Context) (*Solver, error) {
@@ -86,14 +87,10 @@ func NewSolver(ctx *controller.Context) (*Solver, error) {
 		serviceLister:        ctx.KubeSharedInformerFactory.Core().V1().Services().Lister(),
 		ingressLister:        ingressLister,
 		ingressCreateUpdater: ingressCreateUpdater,
-		httpRouteLister:      ctx.GWShared.Networking().V1alpha1().HTTPRoutes().Lister(),
+		httpRouteLister:      ctx.GWShared.Gateway().V1alpha2().HTTPRoutes().Lister(),
 		testReachability:     testReachability,
 		requiredPasses:       5,
 	}, nil
-}
-
-func http01LogCtx(ctx context.Context) context.Context {
-	return logf.NewContext(ctx, nil, "http01")
 }
 
 func http01IngressCfgForChallenge(ch *cmacme.Challenge) (*cmacme.ACMEChallengeSolverHTTP01Ingress, error) {
@@ -118,7 +115,8 @@ func getServiceType(ch *cmacme.Challenge) (corev1.ServiceType, error) {
 // challenge validation in the apiserver. If those resources already exist, it
 // will return nil (i.e. this function is idempotent).
 func (s *Solver) Present(ctx context.Context, issuer v1.GenericIssuer, ch *cmacme.Challenge) error {
-	ctx = http01LogCtx(ctx)
+	log := logf.FromContext(ctx).WithName(loggerName)
+	ctx = logf.NewContext(ctx, log)
 
 	_, podErr := s.ensurePod(ctx, ch)
 	svc, svcErr := s.ensureService(ctx, ch)
@@ -148,8 +146,8 @@ func (s *Solver) Present(ctx context.Context, issuer v1.GenericIssuer, ch *cmacm
 }
 
 func (s *Solver) Check(ctx context.Context, issuer v1.GenericIssuer, ch *cmacme.Challenge) error {
-	ctx = logf.NewContext(http01LogCtx(ctx), nil, "selfCheck")
-	log := logf.FromContext(ctx)
+	log := logf.FromContext(ctx, loggerName, "selfCheck")
+	ctx = logf.NewContext(ctx, log)
 
 	// HTTP Present is idempotent and the state of the system may have
 	// changed since present was called by the controllers (killed pods, drained nodes)
@@ -173,7 +171,7 @@ func (s *Solver) Check(ctx context.Context, issuer v1.GenericIssuer, ch *cmacme.
 
 	log.V(logf.DebugLevel).Info("running self check multiple times to ensure challenge has propagated", "required_passes", s.requiredPasses)
 	for i := 0; i < s.requiredPasses; i++ {
-		err := s.testReachability(ctx, url, ch.Spec.Key)
+		err := s.testReachability(ctx, url, ch.Spec.Key, s.HTTP01SolverNameservers, s.Context.RESTConfig.UserAgent)
 		if err != nil {
 			return err
 		}
@@ -212,7 +210,7 @@ func (s *Solver) buildChallengeUrl(ch *cmacme.Challenge) *url.URL {
 
 // testReachability will attempt to connect to the 'domain' with 'path' and
 // check if the returned body equals 'key'
-func testReachability(ctx context.Context, url *url.URL, key string) error {
+func testReachability(ctx context.Context, url *url.URL, key string, dnsServers []string, userAgent string) error {
 	log := logf.FromContext(ctx)
 	log.V(logf.DebugLevel).Info("performing HTTP01 reachability check")
 
@@ -220,7 +218,7 @@ func testReachability(ctx context.Context, url *url.URL, key string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", pkgutil.CertManagerUserAgent)
+	req.Header.Set("User-Agent", userAgent)
 
 	// The ACME spec says that a verifier should try on http port 80 first, but to follow any
 	// redirects which may be returned. Let's Encrypt, in practice, follows redirects for HTTP
@@ -270,6 +268,28 @@ func testReachability(ctx context.Context, url *url.URL, key string) error {
 		},
 	}
 
+	if len(dnsServers) != 0 {
+		transport.DialContext = func(ctx context.Context, network, addr string) (conn net.Conn, err error) {
+			// we need to increment a counter to iterate through the dns servers as the dialer will not
+			// return an error if the dns server is not responding.
+			counter := 0
+			dialer := &net.Dialer{
+				Timeout: 3 * time.Second,
+				Resolver: &net.Resolver{
+					PreferGo: true,
+					Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+						d := net.Dialer{
+							Timeout: 3 * time.Second,
+						}
+						s := dnsServers[counter%len(dnsServers)]
+						counter++
+						return d.DialContext(ctx, network, s)
+					},
+				},
+			}
+			return dialer.DialContext(ctx, network, addr)
+		}
+	}
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   time.Second * 10,

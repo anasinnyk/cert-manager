@@ -30,17 +30,17 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/record"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	experimentalapi "github.com/jetstack/cert-manager/pkg/apis/experimental/v1alpha1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/util"
-	venaficlient "github.com/jetstack/cert-manager/pkg/issuer/venafi/client"
-	venafiapi "github.com/jetstack/cert-manager/pkg/issuer/venafi/client/api"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
-	utilpki "github.com/jetstack/cert-manager/pkg/util/pki"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	experimentalapi "github.com/cert-manager/cert-manager/pkg/apis/experimental/v1alpha1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/util"
+	venaficlient "github.com/cert-manager/cert-manager/pkg/issuer/venafi/client"
+	venafiapi "github.com/cert-manager/cert-manager/pkg/issuer/venafi/client/api"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
+	utilpki "github.com/cert-manager/cert-manager/pkg/util/pki"
 )
 
 const (
@@ -57,23 +57,27 @@ type Venafi struct {
 	recorder      record.EventRecorder
 
 	clientBuilder venaficlient.VenafiClientBuilder
+
+	// fieldManager is the manager name used for the Apply operations.
+	fieldManager string
 }
 
 func init() {
-	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, CSRControllerName).
-			For(certificatesigningrequests.New(apiutil.IssuerVenafi, NewVenafi(ctx))).
+			For(certificatesigningrequests.New(apiutil.IssuerVenafi, NewVenafi)).
 			Complete()
 	})
 }
 
-func NewVenafi(ctx *controllerpkg.Context) *Venafi {
+func NewVenafi(ctx *controllerpkg.Context) certificatesigningrequests.Signer {
 	return &Venafi{
 		issuerOptions: ctx.IssuerOptions,
 		secretsLister: ctx.KubeSharedInformerFactory.Core().V1().Secrets().Lister(),
 		certClient:    ctx.Client.CertificatesV1().CertificateSigningRequests(),
 		recorder:      ctx.Recorder,
 		clientBuilder: venaficlient.New,
+		fieldManager:  ctx.FieldManager,
 	}
 }
 
@@ -113,7 +117,7 @@ func (v *Venafi) Sign(ctx context.Context, csr *certificatesv1.CertificateSignin
 			message := fmt.Sprintf("Failed to parse %q annotation: %s", experimentalapi.CertificateSigningRequestVenafiCustomFieldsAnnotationKey, err)
 			v.recorder.Event(csr, corev1.EventTypeWarning, "ErrorCustomFields", message)
 			util.CertificateSigningRequestSetFailed(csr, "ErrorCustomFields", message)
-			_, userr := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+			_, userr := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 			return userr
 		}
 	}
@@ -124,7 +128,7 @@ func (v *Venafi) Sign(ctx context.Context, csr *certificatesv1.CertificateSignin
 		log.Error(err, message)
 		v.recorder.Event(csr, corev1.EventTypeWarning, "ErrorParseDuration", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorParseDuration", message)
-		_, userr := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, userr := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 		return userr
 	}
 
@@ -144,7 +148,7 @@ func (v *Venafi) Sign(ctx context.Context, csr *certificatesv1.CertificateSignin
 				log.Error(err, "")
 				v.recorder.Event(csr, corev1.EventTypeWarning, "ErrorCustomFields", err.Error())
 				util.CertificateSigningRequestSetFailed(csr, "ErrorCustomFields", err.Error())
-				_, userr := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+				_, userr := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 				return userr
 
 			default:
@@ -152,7 +156,7 @@ func (v *Venafi) Sign(ctx context.Context, csr *certificatesv1.CertificateSignin
 				log.Error(err, message)
 				v.recorder.Event(csr, corev1.EventTypeWarning, "ErrorRequest", message)
 				util.CertificateSigningRequestSetFailed(csr, "ErrorRequest", message)
-				_, userr := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+				_, userr := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 				return userr
 			}
 		}
@@ -194,12 +198,12 @@ func (v *Venafi) Sign(ctx context.Context, csr *certificatesv1.CertificateSignin
 		log.Error(err, message)
 		v.recorder.Event(csr, corev1.EventTypeWarning, "ErrorParse", message)
 		util.CertificateSigningRequestSetFailed(csr, "ErrorParse", message)
-		_, userr := v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, userr := util.UpdateOrApplyStatus(ctx, v.certClient, csr, certificatesv1.CertificateFailed, v.fieldManager)
 		return userr
 	}
 
 	csr.Status.Certificate = bundle.ChainPEM
-	csr, err = v.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+	csr, err = util.UpdateOrApplyStatus(ctx, v.certClient, csr, "", v.fieldManager)
 	if err != nil {
 		message := "Error updating certificate"
 		v.recorder.Eventf(csr, corev1.EventTypeWarning, "SigningError", "%s: %s", message, err)

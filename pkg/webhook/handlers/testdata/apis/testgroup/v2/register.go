@@ -21,8 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/jetstack/cert-manager/internal/api/validation"
-	"github.com/jetstack/cert-manager/pkg/webhook/handlers/testdata/apis/testgroup"
+	"github.com/cert-manager/cert-manager/pkg/webhook/handlers/testdata/apis/testgroup"
 )
 
 // SchemeGroupVersion is group version used to register these objects
@@ -38,13 +37,6 @@ var (
 	localSchemeBuilder = &SchemeBuilder
 	AddToScheme        = localSchemeBuilder.AddToScheme
 )
-
-func RegisterValidations(reg *validation.Registry) error {
-	if err := reg.AddValidateFunc(&TestType{}, ValidateTestType); err != nil {
-		return err
-	}
-	return nil
-}
 
 func init() {
 	// We only register manually written functions here. The registration of the

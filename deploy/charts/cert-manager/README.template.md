@@ -8,7 +8,7 @@ to renew certificates at an appropriate time before expiry.
 
 ## Prerequisites
 
-- Kubernetes 1.16+
+- Kubernetes 1.18+
 
 ## Installing the Chart
 
@@ -19,7 +19,7 @@ Before installing the chart, you must first install the cert-manager CustomResou
 This is performed in a separate step to allow you to easily uninstall and reinstall cert-manager without deleting your installed custom resources.
 
 ```bash
-$ kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/{{RELEASE_VERSION}}/cert-manager.crds.yaml
+$ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/{{RELEASE_VERSION}}/cert-manager.crds.yaml
 ```
 
 To install the chart with the release name `my-release`:
@@ -65,7 +65,7 @@ If you want to completely uninstall cert-manager from your cluster, you will als
 delete the previously installed CustomResourceDefinition resources:
 
 ```console
-$ kubectl delete -f https://github.com/jetstack/cert-manager/releases/download/{{RELEASE_VERSION}}/cert-manager.crds.yaml
+$ kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/{{RELEASE_VERSION}}/cert-manager.crds.yaml
 ```
 
 ## Configuration
@@ -89,7 +89,7 @@ The following table lists the configurable parameters of the cert-manager chart 
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `replicaCount`  | Number of cert-manager replicas  | `1` |
 | `clusterResourceNamespace` | Override the namespace used to store DNS provider credentials etc. for ClusterIssuer resources | Same namespace as cert-manager pod |
-| `featureGates` | Comma-separated list of feature gates to enable on the controller pod | `` |
+| `featureGates` | Set of comma-separated key=value pairs that describe feature gates on the controller. Some feature gates may also have to be enabled on other components, and can be set supplying the `feature-gate` flag to `<component>.extraArgs` | `` |
 | `extraArgs` | Optional flags for cert-manager | `[]` |
 | `extraEnv` | Optional environment variables for cert-manager | `[]` |
 | `serviceAccount.create` | If `true`, create a new service account | `true` |
@@ -99,7 +99,7 @@ The following table lists the configurable parameters of the cert-manager chart 
 | `volumes` | Optional volumes for cert-manager | `[]` |
 | `volumeMounts` | Optional volume mounts for cert-manager | `[]` |
 | `resources` | CPU/memory resource requests/limits | `{}` |
-| `securityContext` | Optional security context. The yaml block should adhere to the [SecurityContext spec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.16/#securitycontext-v1-core) | `{}` |
+| `securityContext` | Optional security context. The yaml block should adhere to the [SecurityContext spec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#securitycontext-v1-core) | `{}` |
 | `securityContext.enabled` | Deprecated (use `securityContext`) - Enable security context | `false` |
 | `containerSecurityContext` | Security context to be set on the controller component container | `{}` |
 | `nodeSelector` | Node labels for pod assignment | `{}` |
@@ -117,6 +117,7 @@ The following table lists the configurable parameters of the cert-manager chart 
 | `prometheus.servicemonitor.interval` | Prometheus scrape interval | `60s` |
 | `prometheus.servicemonitor.labels` | Add custom labels to ServiceMonitor | |
 | `prometheus.servicemonitor.scrapeTimeout` | Prometheus scrape timeout | `30s` |
+| `prometheus.servicemonitor.honorLabels` | Enable label honoring for metrics scraped by Prometheus (see [Prometheus scrape config docs](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config) for details). By setting `honorLabels` to `true`, Prometheus will prefer label contents given by cert-manager on conflicts. Can be used to remove the "exported_namespace" label for example.  | `false` |
 | `podAnnotations` | Annotations to add to the cert-manager pod | `{}` |
 | `deploymentAnnotations` | Annotations to add to the cert-manager deployment | `{}` |
 | `podDnsPolicy` | Optional cert-manager pod [DNS policy](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pods-dns-policy) |  |
@@ -136,6 +137,7 @@ The following table lists the configurable parameters of the cert-manager chart 
 | `webhook.mutatingWebhookConfigurationAnnotations` | Annotations to add to the mutating webhook configuration | `{}` |
 | `webhook.validatingWebhookConfigurationAnnotations` | Annotations to add to the validating webhook configuration | `{}` |
 | `webhook.serviceAnnotations` | Annotations to add to the webhook service | `{}` |
+| `webhook.config` | WebhookConfiguration YAML used to configure flags for the webhook. Generates a ConfigMap containing contents of the field. See `values.yaml` for example. | `{}` |
 | `webhook.extraArgs` | Optional flags for cert-manager webhook component | `[]` |
 | `webhook.serviceAccount.create` | If `true`, create a new service account for the webhook component | `true` |
 | `webhook.serviceAccount.name` | Service account for the webhook component to be used. If not set and `webhook.serviceAccount.create` is `true`, a name is generated using the fullname template |  |
@@ -211,8 +213,8 @@ Alternatively, a YAML file that specifies the values for the above parameters ca
 ```console
 $ helm install my-release -f values.yaml .
 ```
-> **Tip**: You can use the default [values.yaml](https://github.com/jetstack/cert-manager/blob/master/deploy/charts/cert-manager/values.yaml)
+> **Tip**: You can use the default [values.yaml](https://github.com/cert-manager/cert-manager/blob/master/deploy/charts/cert-manager/values.yaml)
 
 ## Contributing
 
-This chart is maintained at [github.com/jetstack/cert-manager](https://github.com/jetstack/cert-manager/tree/master/deploy/charts/cert-manager).
+This chart is maintained at [github.com/cert-manager/cert-manager](https://github.com/cert-manager/cert-manager/tree/master/deploy/charts/cert-manager).

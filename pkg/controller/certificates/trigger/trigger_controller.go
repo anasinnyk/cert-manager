@@ -32,18 +32,21 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	cmclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
-	cminformers "github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
-	cmlisters "github.com/jetstack/cert-manager/pkg/client/listers/certmanager/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates/trigger/policies"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/scheduler"
-	"github.com/jetstack/cert-manager/pkg/util/predicate"
+	internalcertificates "github.com/cert-manager/cert-manager/internal/controller/certificates"
+	"github.com/cert-manager/cert-manager/internal/controller/certificates/policies"
+	"github.com/cert-manager/cert-manager/internal/controller/feature"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	cmclient "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned"
+	cminformers "github.com/cert-manager/cert-manager/pkg/client/informers/externalversions"
+	cmlisters "github.com/cert-manager/cert-manager/pkg/client/listers/certmanager/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/pkg/scheduler"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
+	"github.com/cert-manager/cert-manager/pkg/util/predicate"
 )
 
 const ControllerName = "certificates-trigger"
@@ -61,6 +64,11 @@ type controller struct {
 	recorder                 record.EventRecorder
 	scheduledWorkQueue       scheduler.ScheduledWorkQueue
 
+	// fieldManager is the string which will be used as the Field Manager on
+	// fields created or edited by the cert-manager Kubernetes client during
+	// Apply API calls.
+	fieldManager string
+
 	// The following are used for testing purposes.
 	clock              clock.Clock
 	shouldReissue      policies.Func
@@ -75,6 +83,7 @@ func NewController(
 	recorder record.EventRecorder,
 	clock clock.Clock,
 	shouldReissue policies.Func,
+	fieldManager string,
 ) (*controller, workqueue.RateLimitingInterface, []cache.InformerSynced) {
 	// create a queue used to queue up items to be processed
 	queue := workqueue.NewNamedRateLimitingQueue(workqueue.NewItemExponentialFailureRateLimiter(time.Second*1, time.Second*30), ControllerName)
@@ -112,6 +121,7 @@ func NewController(
 		client:                   client,
 		recorder:                 recorder,
 		scheduledWorkQueue:       scheduler.NewScheduledWorkQueue(clock, queue.Add),
+		fieldManager:             fieldManager,
 
 		// The following are used for testing purposes.
 		clock:         clock,
@@ -134,7 +144,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 
 	crt, err := c.certificateLister.Certificates(namespace).Get(name)
 	if apierrors.IsNotFound(err) {
-		log.Error(err, "certificate not found for key")
+		log.V(logf.DebugLevel).Info("certificate not found for key", "error", err.Error())
 		return nil
 	}
 	if err != nil {
@@ -182,13 +192,31 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 
 	crt = crt.DeepCopy()
 	apiutil.SetCertificateCondition(crt, crt.Generation, cmapi.CertificateConditionIssuing, cmmeta.ConditionTrue, reason, message)
-	_, err = c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
-	if err != nil {
+	if err := c.updateOrApplyStatus(ctx, crt); err != nil {
 		return err
 	}
 	c.recorder.Event(crt, corev1.EventTypeNormal, "Issuing", message)
 
 	return nil
+}
+
+// updateOrApplyStatus will update the controller status. If the
+// ServerSideApply feature is enabled, the managed fields will instead get
+// applied using the relevant Patch API call.
+func (c *controller) updateOrApplyStatus(ctx context.Context, crt *cmapi.Certificate) error {
+	if utilfeature.DefaultFeatureGate.Enabled(feature.ServerSideApply) {
+		var conditions []cmapi.CertificateCondition
+		if cond := apiutil.GetCertificateCondition(crt, cmapi.CertificateConditionIssuing); cond != nil {
+			conditions = []cmapi.CertificateCondition{*cond}
+		}
+		return internalcertificates.ApplyStatus(ctx, c.client, c.fieldManager, &cmapi.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Namespace: crt.Namespace, Name: crt.Name},
+			Status:     cmapi.CertificateStatus{Conditions: conditions},
+		})
+	} else {
+		_, err := c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
+		return err
+	}
 }
 
 // shouldBackoffReissuingOnFailure tells us if we should back-off re-issuing for
@@ -274,6 +302,7 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 		ctx.Recorder,
 		ctx.Clock,
 		policies.NewTriggerPolicyChain(ctx.Clock).Evaluate,
+		ctx.FieldManager,
 	)
 	c.controller = ctrl
 
@@ -281,7 +310,7 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 }
 
 func init() {
-	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, ControllerName).
 			For(&controllerWrapper{}).
 			Complete()

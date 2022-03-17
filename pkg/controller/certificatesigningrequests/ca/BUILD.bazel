@@ -3,7 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "go_default_library",
     srcs = ["ca.go"],
-    importpath = "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/ca",
+    importpath = "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/ca",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/api/util:go_default_library",
@@ -18,7 +18,6 @@ go_library(
         "@io_k8s_api//certificates/v1:go_default_library",
         "@io_k8s_api//core/v1:go_default_library",
         "@io_k8s_apimachinery//pkg/api/errors:go_default_library",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:go_default_library",
         "@io_k8s_client_go//kubernetes/typed/certificates/v1:go_default_library",
         "@io_k8s_client_go//listers/core/v1:go_default_library",
         "@io_k8s_client_go//tools/record:go_default_library",

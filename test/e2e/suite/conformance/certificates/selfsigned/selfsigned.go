@@ -18,15 +18,16 @@ package selfsigned
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/suite/conformance/certificates"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/suite/conformance/certificates"
 )
 
 var _ = framework.ConformanceDescribe("Certificates", func() {
@@ -53,6 +54,11 @@ func createSelfSignedIssuer(f *framework.Framework) cmmeta.ObjectReference {
 	}, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create self signed issuer")
 
+	// wait for issuer to be ready
+	By("Waiting for Self Signed Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
 		Kind:  cmapi.IssuerKind,
@@ -75,6 +81,11 @@ func createSelfSignedClusterIssuer(f *framework.Framework) cmmeta.ObjectReferenc
 		Spec: createSelfSignedIssuerSpec(),
 	}, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create self signed issuer")
+
+	// wait for issuer to be ready
+	By("Waiting for Self Signed Cluster Issuer to be Ready")
+	issuer, err = f.Helper().WaitClusterIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
 
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,

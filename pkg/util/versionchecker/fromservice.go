@@ -27,7 +27,7 @@ import (
 
 var imageVersion = regexp.MustCompile(`^quay.io/jetstack/cert-manager-webhook:(v(?:\d+)\.(?:\d+)\.(?:\d+)(?:.*))$`)
 
-func (o *versionChecker) extractVersionFromService(
+func (o *VersionChecker) extractVersionFromService(
 	ctx context.Context,
 	namespace string,
 	serviceName string,
@@ -53,6 +53,10 @@ func (o *versionChecker) extractVersionFromService(
 	}
 
 	for _, pod := range pods.Items {
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+
 		if label := extractVersionFromLabels(pod.Labels); label != "" {
 			o.versionSources["webhookPodLabelVersion"] = label
 		}

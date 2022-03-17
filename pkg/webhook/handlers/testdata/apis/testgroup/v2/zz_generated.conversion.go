@@ -22,7 +22,7 @@ limitations under the License.
 package v2
 
 import (
-	testgroup "github.com/jetstack/cert-manager/pkg/webhook/handlers/testdata/apis/testgroup"
+	testgroup "github.com/cert-manager/cert-manager/pkg/webhook/handlers/testdata/apis/testgroup"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -52,6 +52,7 @@ func autoConvert_v2_TestType_To_testgroup_TestType(in *TestType, out *testgroup.
 	out.TestField = in.TestField
 	// WARNING: in.TestFieldPtrAlt requires manual conversion: does not exist in peer-type
 	out.TestFieldImmutable = in.TestFieldImmutable
+	out.TestDefaultingField = in.TestDefaultingField
 	return nil
 }
 
@@ -60,5 +61,6 @@ func autoConvert_testgroup_TestType_To_v2_TestType(in *testgroup.TestType, out *
 	out.TestField = in.TestField
 	// WARNING: in.TestFieldPtr requires manual conversion: does not exist in peer-type
 	out.TestFieldImmutable = in.TestFieldImmutable
+	out.TestDefaultingField = in.TestDefaultingField
 	return nil
 }

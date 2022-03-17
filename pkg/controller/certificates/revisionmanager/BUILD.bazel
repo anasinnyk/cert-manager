@@ -3,7 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "go_default_library",
     srcs = ["revisionmanager_controller.go"],
-    importpath = "github.com/jetstack/cert-manager/pkg/controller/certificates/revisionmanager",
+    importpath = "github.com/cert-manager/cert-manager/pkg/controller/certificates/revisionmanager",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/api/util:go_default_library",
@@ -49,8 +49,8 @@ go_test(
         "//pkg/apis/meta/v1:go_default_library",
         "//pkg/controller:go_default_library",
         "//pkg/controller/test:go_default_library",
-        "//pkg/logs/testing:go_default_library",
         "//test/unit/gen:go_default_library",
+        "@com_github_go_logr_logr//testing:go_default_library",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:go_default_library",
         "@io_k8s_apimachinery//pkg/runtime:go_default_library",
         "@io_k8s_apimachinery//pkg/types:go_default_library",

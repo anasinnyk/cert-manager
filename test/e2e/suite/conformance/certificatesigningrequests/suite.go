@@ -18,17 +18,14 @@ package certificatesigningrequests
 
 import (
 	"crypto"
-	"fmt"
-	"os"
-	"strings"
 
 	. "github.com/onsi/ginkgo"
 	certificatesv1 "k8s.io/api/certificates/v1"
 
-	"github.com/jetstack/cert-manager/pkg/feature"
-	"github.com/jetstack/cert-manager/pkg/util"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/featureset"
+	"github.com/cert-manager/cert-manager/internal/controller/feature"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/featureset"
 )
 
 // Suite defines a reusable conformance test suite that can be used against any
@@ -107,15 +104,10 @@ func (s *Suite) complete(f *framework.Framework) {
 // it is called by the tests to in Define() to setup and run the test
 func (s *Suite) it(f *framework.Framework, name string, fn func(string), requiredFeatures ...featureset.Feature) {
 	if !s.checkFeatures(requiredFeatures...) {
-		fmt.Fprintln(GinkgoWriter, "skipping case due to unsupported features")
 		return
 	}
 	It(name, func() {
-		fgs := os.Getenv("FEATURE_GATES")
-		if !util.Contains(strings.Split(fgs, ","), string(feature.ExperimentalCertificateSigningRequestControllers)+"=true") {
-			framework.Skipf("skipping CertificateSigningRequest controller test since FEATURE_GATE %s is not enabled",
-				feature.ExperimentalCertificateSigningRequestControllers)
-		}
+		framework.RequireFeatureGate(f, utilfeature.DefaultFeatureGate, feature.ExperimentalCertificateSigningRequestControllers)
 
 		By("Creating an issuer resource")
 		signerName := s.CreateIssuerFunc(f)

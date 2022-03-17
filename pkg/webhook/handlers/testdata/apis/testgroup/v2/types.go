@@ -22,6 +22,7 @@ import (
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
+// +kubebuilder:storageversion
 // TestType in v2 is identical to v1, except TestFieldPtr has been renamed to TestFieldPtrAlt
 type TestType struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -35,6 +36,11 @@ type TestType struct {
 
 	// TestFieldImmutable cannot be changed after being set to a non-zero value
 	TestFieldImmutable string `json:"testFieldImmutable"`
+
+	// TestDefaultingField is used to test defaulting.
+	// In the v1 API, it defaults to `set-in-v1`.
+	// In the v2 API, it defaults to `set-in-v2`.
+	TestDefaultingField string `json:"testDefaultingField,omitempty"`
 }
 
 const (

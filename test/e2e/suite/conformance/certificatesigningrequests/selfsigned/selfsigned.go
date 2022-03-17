@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -27,12 +28,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	experimentalapi "github.com/jetstack/cert-manager/pkg/apis/experimental/v1alpha1"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/util"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/suite/conformance/certificatesigningrequests"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	experimentalapi "github.com/cert-manager/cert-manager/pkg/apis/experimental/v1alpha1"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/util"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/suite/conformance/certificatesigningrequests"
 )
 
 var _ = framework.ConformanceDescribe("CertificateSigningRequests", func() {
@@ -106,6 +107,11 @@ func createSelfSignedIssuer(f *framework.Framework) string {
 	}, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create self signed issuer")
 
+	// wait for issuer to be ready
+	By("Waiting for Self Signed Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return fmt.Sprintf("issuers.cert-manager.io/%s.%s", f.Namespace.Name, issuer.Name)
 }
 
@@ -123,6 +129,11 @@ func createSelfSignedClusterIssuer(f *framework.Framework) string {
 		},
 	}, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create self signed issuer")
+
+	// wait for issuer to be ready
+	By("Waiting for Self Signed Cluster Issuer to be Ready")
+	issuer, err = f.Helper().WaitClusterIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
 
 	return fmt.Sprintf("clusterissuers.cert-manager.io/%s", issuer.Name)
 }

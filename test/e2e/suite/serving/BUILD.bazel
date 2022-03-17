@@ -3,7 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "go_default_library",
     srcs = ["cainjector.go"],
-    importpath = "github.com/jetstack/cert-manager/test/e2e/suite/serving",
+    importpath = "github.com/cert-manager/cert-manager/test/e2e/suite/serving",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/apis/certmanager/v1:go_default_library",
@@ -19,6 +19,7 @@ go_library(
         "@io_k8s_apimachinery//pkg/apis/meta/v1:go_default_library",
         "@io_k8s_apimachinery//pkg/runtime:go_default_library",
         "@io_k8s_apimachinery//pkg/types:go_default_library",
+        "@io_k8s_client_go//util/retry:go_default_library",
         "@io_k8s_kube_aggregator//pkg/apis/apiregistration/v1:go_default_library",
         "@io_k8s_sigs_controller_runtime//pkg/client:go_default_library",
     ],

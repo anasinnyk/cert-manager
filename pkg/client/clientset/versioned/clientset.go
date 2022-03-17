@@ -20,15 +20,10 @@ package versioned
 
 import (
 	"fmt"
+	"net/http"
 
-	acmev1 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/acme/v1"
-	acmev1alpha2 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/acme/v1alpha2"
-	acmev1alpha3 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/acme/v1alpha3"
-	acmev1beta1 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/acme/v1beta1"
-	certmanagerv1 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
-	certmanagerv1alpha2 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1alpha2"
-	certmanagerv1alpha3 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1alpha3"
-	certmanagerv1beta1 "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1beta1"
+	acmev1 "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned/typed/acme/v1"
+	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -36,13 +31,7 @@ import (
 
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
-	AcmeV1alpha2() acmev1alpha2.AcmeV1alpha2Interface
-	AcmeV1alpha3() acmev1alpha3.AcmeV1alpha3Interface
-	AcmeV1beta1() acmev1beta1.AcmeV1beta1Interface
 	AcmeV1() acmev1.AcmeV1Interface
-	CertmanagerV1alpha2() certmanagerv1alpha2.CertmanagerV1alpha2Interface
-	CertmanagerV1alpha3() certmanagerv1alpha3.CertmanagerV1alpha3Interface
-	CertmanagerV1beta1() certmanagerv1beta1.CertmanagerV1beta1Interface
 	CertmanagerV1() certmanagerv1.CertmanagerV1Interface
 }
 
@@ -50,49 +39,13 @@ type Interface interface {
 // version included in a Clientset.
 type Clientset struct {
 	*discovery.DiscoveryClient
-	acmeV1alpha2        *acmev1alpha2.AcmeV1alpha2Client
-	acmeV1alpha3        *acmev1alpha3.AcmeV1alpha3Client
-	acmeV1beta1         *acmev1beta1.AcmeV1beta1Client
-	acmeV1              *acmev1.AcmeV1Client
-	certmanagerV1alpha2 *certmanagerv1alpha2.CertmanagerV1alpha2Client
-	certmanagerV1alpha3 *certmanagerv1alpha3.CertmanagerV1alpha3Client
-	certmanagerV1beta1  *certmanagerv1beta1.CertmanagerV1beta1Client
-	certmanagerV1       *certmanagerv1.CertmanagerV1Client
-}
-
-// AcmeV1alpha2 retrieves the AcmeV1alpha2Client
-func (c *Clientset) AcmeV1alpha2() acmev1alpha2.AcmeV1alpha2Interface {
-	return c.acmeV1alpha2
-}
-
-// AcmeV1alpha3 retrieves the AcmeV1alpha3Client
-func (c *Clientset) AcmeV1alpha3() acmev1alpha3.AcmeV1alpha3Interface {
-	return c.acmeV1alpha3
-}
-
-// AcmeV1beta1 retrieves the AcmeV1beta1Client
-func (c *Clientset) AcmeV1beta1() acmev1beta1.AcmeV1beta1Interface {
-	return c.acmeV1beta1
+	acmeV1        *acmev1.AcmeV1Client
+	certmanagerV1 *certmanagerv1.CertmanagerV1Client
 }
 
 // AcmeV1 retrieves the AcmeV1Client
 func (c *Clientset) AcmeV1() acmev1.AcmeV1Interface {
 	return c.acmeV1
-}
-
-// CertmanagerV1alpha2 retrieves the CertmanagerV1alpha2Client
-func (c *Clientset) CertmanagerV1alpha2() certmanagerv1alpha2.CertmanagerV1alpha2Interface {
-	return c.certmanagerV1alpha2
-}
-
-// CertmanagerV1alpha3 retrieves the CertmanagerV1alpha3Client
-func (c *Clientset) CertmanagerV1alpha3() certmanagerv1alpha3.CertmanagerV1alpha3Interface {
-	return c.certmanagerV1alpha3
-}
-
-// CertmanagerV1beta1 retrieves the CertmanagerV1beta1Client
-func (c *Clientset) CertmanagerV1beta1() certmanagerv1beta1.CertmanagerV1beta1Interface {
-	return c.certmanagerV1beta1
 }
 
 // CertmanagerV1 retrieves the CertmanagerV1Client
@@ -111,7 +64,25 @@ func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 // NewForConfig creates a new Clientset for the given config.
 // If config's RateLimiter is not set and QPS and Burst are acceptable,
 // NewForConfig will generate a rate-limiter in configShallowCopy.
+// NewForConfig is equivalent to NewForConfigAndClient(c, httpClient),
+// where httpClient was generated with rest.HTTPClientFor(c).
 func NewForConfig(c *rest.Config) (*Clientset, error) {
+	configShallowCopy := *c
+
+	// share the transport between all clients
+	httpClient, err := rest.HTTPClientFor(&configShallowCopy)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewForConfigAndClient(&configShallowCopy, httpClient)
+}
+
+// NewForConfigAndClient creates a new Clientset for the given config and http client.
+// Note the http client provided takes precedence over the configured transport values.
+// If config's RateLimiter is not set and QPS and Burst are acceptable,
+// NewForConfigAndClient will generate a rate-limiter in configShallowCopy.
+func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset, error) {
 	configShallowCopy := *c
 	if configShallowCopy.RateLimiter == nil && configShallowCopy.QPS > 0 {
 		if configShallowCopy.Burst <= 0 {
@@ -119,42 +90,19 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 		}
 		configShallowCopy.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(configShallowCopy.QPS, configShallowCopy.Burst)
 	}
+
 	var cs Clientset
 	var err error
-	cs.acmeV1alpha2, err = acmev1alpha2.NewForConfig(&configShallowCopy)
+	cs.acmeV1, err = acmev1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	cs.acmeV1alpha3, err = acmev1alpha3.NewForConfig(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-	cs.acmeV1beta1, err = acmev1beta1.NewForConfig(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-	cs.acmeV1, err = acmev1.NewForConfig(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-	cs.certmanagerV1alpha2, err = certmanagerv1alpha2.NewForConfig(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-	cs.certmanagerV1alpha3, err = certmanagerv1alpha3.NewForConfig(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-	cs.certmanagerV1beta1, err = certmanagerv1beta1.NewForConfig(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-	cs.certmanagerV1, err = certmanagerv1.NewForConfig(&configShallowCopy)
+	cs.certmanagerV1, err = certmanagerv1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
 
-	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfig(&configShallowCopy)
+	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -164,30 +112,17 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 // NewForConfigOrDie creates a new Clientset for the given config and
 // panics if there is an error in the config.
 func NewForConfigOrDie(c *rest.Config) *Clientset {
-	var cs Clientset
-	cs.acmeV1alpha2 = acmev1alpha2.NewForConfigOrDie(c)
-	cs.acmeV1alpha3 = acmev1alpha3.NewForConfigOrDie(c)
-	cs.acmeV1beta1 = acmev1beta1.NewForConfigOrDie(c)
-	cs.acmeV1 = acmev1.NewForConfigOrDie(c)
-	cs.certmanagerV1alpha2 = certmanagerv1alpha2.NewForConfigOrDie(c)
-	cs.certmanagerV1alpha3 = certmanagerv1alpha3.NewForConfigOrDie(c)
-	cs.certmanagerV1beta1 = certmanagerv1beta1.NewForConfigOrDie(c)
-	cs.certmanagerV1 = certmanagerv1.NewForConfigOrDie(c)
-
-	cs.DiscoveryClient = discovery.NewDiscoveryClientForConfigOrDie(c)
-	return &cs
+	cs, err := NewForConfig(c)
+	if err != nil {
+		panic(err)
+	}
+	return cs
 }
 
 // New creates a new Clientset for the given RESTClient.
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
-	cs.acmeV1alpha2 = acmev1alpha2.New(c)
-	cs.acmeV1alpha3 = acmev1alpha3.New(c)
-	cs.acmeV1beta1 = acmev1beta1.New(c)
 	cs.acmeV1 = acmev1.New(c)
-	cs.certmanagerV1alpha2 = certmanagerv1alpha2.New(c)
-	cs.certmanagerV1alpha3 = certmanagerv1alpha3.New(c)
-	cs.certmanagerV1beta1 = certmanagerv1beta1.New(c)
 	cs.certmanagerV1 = certmanagerv1.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)

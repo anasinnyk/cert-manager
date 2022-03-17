@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	networkingv1beta1 "k8s.io/api/networking/v1beta1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
@@ -37,16 +38,15 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
-	"sigs.k8s.io/gateway-api/apis/v1alpha1"
-	gwapiv1alpha1 "sigs.k8s.io/gateway-api/apis/v1alpha1"
+	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	v1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	clientset "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
-	"github.com/jetstack/cert-manager/pkg/util"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
-	"github.com/jetstack/cert-manager/test/e2e/framework/log"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	v1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	clientset "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
+	"github.com/cert-manager/cert-manager/pkg/util"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/log"
 )
 
 func CertificateOnlyValidForDomains(cert *x509.Certificate, commonName string, dnsNames ...string) bool {
@@ -370,79 +370,46 @@ func pathTypePrefix() *networkingv1.PathType {
 	return &p
 }
 
-func NewGateway(gatewayName, ns, secretName string, annotations map[string]string, dnsNames ...string) (*gwapiv1alpha1.Gateway, *gwapiv1alpha1.HTTPRoute) {
-	var hostnames []gwapiv1alpha1.Hostname
-	for _, dnsName := range dnsNames {
-		hostnames = append(hostnames, gwapiv1alpha1.Hostname(dnsName))
-	}
+// NewGateway creates a new test Gateway. There is no Gateway controller
+// watching the 'foo' gateway class, so this Gateway will not be used to
+// actually route traffic, but can be used to test cert-manager controllers that
+// sync Gateways, such as gateway-shim.
+func NewGateway(gatewayName, ns, secretName string, annotations map[string]string, dnsNames ...string) *gwapiv1alpha2.Gateway {
 
-	return &gwapiv1alpha1.Gateway{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        gatewayName,
-				Annotations: annotations,
-			},
-			Spec: gwapiv1alpha1.GatewaySpec{
-				GatewayClassName: "istio",
-				Listeners: []v1alpha1.Listener{{
-					Routes: gwapiv1alpha1.RouteBindingSelector{
+	return &gwapiv1alpha2.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        gatewayName,
+			Annotations: annotations,
+		},
+		Spec: gwapiv1alpha2.GatewaySpec{
+			GatewayClassName: "foo",
+			Listeners: []gwapiv1alpha2.Listener{{
+				AllowedRoutes: &gwapiv1alpha2.AllowedRoutes{
+					Namespaces: &gwapiv1alpha2.RouteNamespaces{
+						From: func() *gwapiv1alpha2.FromNamespaces { f := gwapiv1alpha2.NamespacesFromSame; return &f }(),
 						Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
 							"gw": gatewayName,
 						}},
 					},
-					Port:     gwapiv1alpha1.PortNumber(80),
-					Hostname: (*gwapiv1alpha1.Hostname)(&dnsNames[0]),
-					TLS: &gwapiv1alpha1.GatewayTLSConfig{
-						CertificateRef: &gwapiv1alpha1.LocalObjectReference{
-							Name:  secretName,
-							Kind:  "Secret",
-							Group: "core",
+					Kinds: nil,
+				},
+				Name:     "acme-solver",
+				Protocol: gwapiv1alpha2.TCPProtocolType,
+				Port:     gwapiv1alpha2.PortNumber(80),
+				Hostname: (*gwapiv1alpha2.Hostname)(&dnsNames[0]),
+				TLS: &gwapiv1alpha2.GatewayTLSConfig{
+					CertificateRefs: []*gwapiv1alpha2.SecretObjectReference{
+						{
+							Kind:      func() *gwapiv1alpha2.Kind { k := gwapiv1alpha2.Kind("Secret"); return &k }(),
+							Name:      gwapiv1alpha2.ObjectName(secretName),
+							Group:     func() *gwapiv1alpha2.Group { g := gwapiv1alpha2.Group(corev1.GroupName); return &g }(),
+							Namespace: (*gwapiv1alpha2.Namespace)(&ns),
 						},
 					},
-				}},
-			},
+				},
+			}},
 		},
-		&gwapiv1alpha1.HTTPRoute{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        gatewayName,
-				Annotations: annotations,
-				Labels: map[string]string{
-					"gw": gatewayName,
-				},
-			},
-			Spec: gwapiv1alpha1.HTTPRouteSpec{
-				Gateways: &gwapiv1alpha1.RouteGateways{
-					GatewayRefs: []gwapiv1alpha1.GatewayReference{{
-						Name:      gatewayName,
-						Namespace: ns,
-					}},
-				},
-				Hostnames: hostnames,
-				Rules: []gwapiv1alpha1.HTTPRouteRule{{
-					Matches: []gwapiv1alpha1.HTTPRouteMatch{{
-						Path: &gwapiv1alpha1.HTTPPathMatch{
-							Type:  ptrPathMatch(gwapiv1alpha1.PathMatchExact),
-							Value: ptrStr("/"),
-						},
-					}},
-					ForwardTo: []gwapiv1alpha1.HTTPRouteForwardTo{{
-						ServiceName: ptrStr("dummy-service"),
-						Port:        ptrPort(80),
-					}},
-				}},
-			},
-		}
-}
-func ptrPathMatch(p gwapiv1alpha1.PathMatchType) *gwapiv1alpha1.PathMatchType {
-	return &p
-}
-
-func ptrStr(s string) *string {
-	return &s
-}
-
-func ptrPort(port int32) *gwapiv1alpha1.PortNumber {
-	p := gwapiv1alpha1.PortNumber(port)
-	return &p
+	}
 }
 
 // HasIngresses lets you know if an API exists in the discovery API

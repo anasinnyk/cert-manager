@@ -30,19 +30,19 @@ import (
 	certificatesclient "k8s.io/client-go/kubernetes/typed/certificates/v1"
 	"k8s.io/client-go/tools/record"
 
-	"github.com/jetstack/cert-manager/pkg/acme"
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	cmacmeclientset "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/acme/v1"
-	cmacmelisters "github.com/jetstack/cert-manager/pkg/client/listers/acme/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests"
-	ctrlutil "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/util"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/util"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
+	"github.com/cert-manager/cert-manager/pkg/acme"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmacme "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	cmacmeclientset "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned/typed/acme/v1"
+	cmacmelisters "github.com/cert-manager/cert-manager/pkg/client/listers/acme/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests"
+	ctrlutil "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/util"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	"github.com/cert-manager/cert-manager/pkg/util"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
 )
 
 const (
@@ -59,24 +59,27 @@ type ACME struct {
 	acmeClientV cmacmeclientset.AcmeV1Interface
 	certClient  certificatesclient.CertificateSigningRequestInterface
 
+	// fieldManager is the manager name used for the Apply operations.
+	fieldManager string
+
 	recorder record.EventRecorder
 
 	copiedAnnotationPrefixes []string
 }
 
 func init() {
-	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(CSRControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, CSRControllerName).
-			For(controllerBuilder(ctx)).
+			For(controllerBuilder()).
 			Complete()
 	})
 }
 
-func controllerBuilder(ctx *controllerpkg.Context) *certificatesigningrequests.Controller {
-	return certificatesigningrequests.New(apiutil.IssuerACME, NewACME(ctx), ctx.SharedInformerFactory.Acme().V1().Orders().Informer())
+func controllerBuilder() *certificatesigningrequests.Controller {
+	return certificatesigningrequests.New(apiutil.IssuerACME, NewACME, cmacme.SchemeGroupVersion.WithResource("orders"))
 }
 
-func NewACME(ctx *controllerpkg.Context) *ACME {
+func NewACME(ctx *controllerpkg.Context) certificatesigningrequests.Signer {
 	return &ACME{
 		issuerOptions:            ctx.IssuerOptions,
 		orderLister:              ctx.SharedInformerFactory.Acme().V1().Orders().Lister(),
@@ -84,6 +87,7 @@ func NewACME(ctx *controllerpkg.Context) *ACME {
 		certClient:               ctx.Client.CertificatesV1().CertificateSigningRequests(),
 		recorder:                 ctx.Recorder,
 		copiedAnnotationPrefixes: ctx.CertificateOptions.CopiedAnnotationPrefixes,
+		fieldManager:             ctx.FieldManager,
 	}
 }
 
@@ -104,7 +108,7 @@ func (a *ACME) Sign(ctx context.Context, csr *certificatesv1.CertificateSigningR
 		log.Error(err, message)
 		a.recorder.Event(csr, corev1.EventTypeWarning, "RequestParsingError", message)
 		ctrlutil.CertificateSigningRequestSetFailed(csr, "RequestParsingError", message)
-		_, uerr := a.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, uerr := ctrlutil.UpdateOrApplyStatus(ctx, a.certClient, csr, certificatesv1.CertificateFailed, a.fieldManager)
 		return uerr
 	}
 
@@ -117,7 +121,7 @@ func (a *ACME) Sign(ctx context.Context, csr *certificatesv1.CertificateSigningR
 		log.Error(err, message)
 		a.recorder.Event(csr, corev1.EventTypeWarning, "InvalidOrder", message)
 		ctrlutil.CertificateSigningRequestSetFailed(csr, "InvalidOrder", message)
-		_, uerr := a.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, uerr := ctrlutil.UpdateOrApplyStatus(ctx, a.certClient, csr, certificatesv1.CertificateFailed, a.fieldManager)
 		return uerr
 	}
 
@@ -129,7 +133,7 @@ func (a *ACME) Sign(ctx context.Context, csr *certificatesv1.CertificateSigningR
 		log.Error(err, message)
 		a.recorder.Event(csr, corev1.EventTypeWarning, "OrderBuildingError", message)
 		ctrlutil.CertificateSigningRequestSetFailed(csr, "OrderBuildingError", message)
-		_, uerr := a.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, uerr := ctrlutil.UpdateOrApplyStatus(ctx, a.certClient, csr, certificatesv1.CertificateFailed, a.fieldManager)
 		return uerr
 	}
 
@@ -174,7 +178,7 @@ func (a *ACME) Sign(ctx context.Context, csr *certificatesv1.CertificateSigningR
 
 		a.recorder.Event(csr, corev1.EventTypeWarning, "OrderFailed", message)
 		ctrlutil.CertificateSigningRequestSetFailed(csr, "OrderFailed", message)
-		_, uerr := a.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+		_, uerr := ctrlutil.UpdateOrApplyStatus(ctx, a.certClient, csr, certificatesv1.CertificateFailed, a.fieldManager)
 		return uerr
 	}
 
@@ -215,7 +219,7 @@ func (a *ACME) Sign(ctx context.Context, csr *certificatesv1.CertificateSigningR
 	}
 
 	csr.Status.Certificate = order.Status.Certificate
-	csr, err = a.certClient.UpdateStatus(ctx, csr, metav1.UpdateOptions{})
+	csr, err = ctrlutil.UpdateOrApplyStatus(ctx, a.certClient, csr, "", a.fieldManager)
 	if err != nil {
 		message := "Error updating certificate"
 		a.recorder.Eventf(csr, corev1.EventTypeWarning, "SigningError", "%s: %s", message, err)

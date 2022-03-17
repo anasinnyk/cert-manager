@@ -19,7 +19,7 @@ package v1
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 )
 
 const (
@@ -132,6 +132,8 @@ type CertificateRequestSpec struct {
 type CertificateRequestStatus struct {
 	// List of status conditions to indicate the status of a CertificateRequest.
 	// Known condition types are `Ready` and `InvalidRequest`.
+	// +listType=map
+	// +listMapKey=type
 	// +optional
 	Conditions []CertificateRequestCondition `json:"conditions,omitempty"`
 

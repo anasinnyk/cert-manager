@@ -10,7 +10,7 @@ go_library(
         "types_order.go",
         "zz_generated.deepcopy.go",
     ],
-    importpath = "github.com/jetstack/cert-manager/internal/apis/acme",
+    importpath = "github.com/cert-manager/cert-manager/internal/apis/acme",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/apis/meta:go_default_library",
@@ -20,6 +20,7 @@ go_library(
         "@io_k8s_apimachinery//pkg/apis/meta/v1:go_default_library",
         "@io_k8s_apimachinery//pkg/runtime:go_default_library",
         "@io_k8s_apimachinery//pkg/runtime/schema:go_default_library",
+        "@io_k8s_sigs_gateway_api//apis/v1alpha2:go_default_library",
     ],
 )
 

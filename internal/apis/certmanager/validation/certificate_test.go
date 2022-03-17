@@ -25,14 +25,13 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 
-	"github.com/jetstack/cert-manager/internal/api/validation"
-	internalcmapi "github.com/jetstack/cert-manager/internal/apis/certmanager"
-	cmmeta "github.com/jetstack/cert-manager/internal/apis/meta"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmapiv1alpha2 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1alpha2"
-	cmapiv1alpha3 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1alpha3"
-	cmapiv1beta1 "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1beta1"
+	internalcmapi "github.com/cert-manager/cert-manager/internal/apis/certmanager"
+	cmmeta "github.com/cert-manager/cert-manager/internal/apis/meta"
+	"github.com/cert-manager/cert-manager/internal/webhook/feature"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -65,7 +64,7 @@ func TestValidateCertificate(t *testing.T) {
 		cfg      *internalcmapi.Certificate
 		a        *admissionv1.AdmissionRequest
 		errs     []*field.Error
-		warnings validation.WarningList
+		warnings []string
 	}{
 		"valid basic certificate": {
 			cfg: &internalcmapi.Certificate{
@@ -565,69 +564,6 @@ func TestValidateCertificate(t *testing.T) {
 				field.Invalid(fldPath.Child("revisionHistoryLimit"), int32(0), "must not be less than 1"),
 			},
 		},
-		"v1alpha2 certificate created": {
-			cfg: &internalcmapi.Certificate{
-				Spec: internalcmapi.CertificateSpec{
-					CommonName: "abc",
-					SecretName: "abc",
-					IssuerRef:  validIssuerRef,
-				},
-			},
-			a: &admissionv1.AdmissionRequest{
-				RequestKind: &metav1.GroupVersionKind{Group: "cert-manager.io",
-					Version: "v1alpha2",
-					Kind:    "Certificate"},
-			},
-			warnings: validation.WarningList{
-				fmt.Sprintf(deprecationMessageTemplate,
-					cmapiv1alpha2.SchemeGroupVersion.String(),
-					"Certificate",
-					cmapi.SchemeGroupVersion.String(),
-					"Certificate"),
-			},
-		},
-		"v1alpha3 certificate created": {
-			cfg: &internalcmapi.Certificate{
-				Spec: internalcmapi.CertificateSpec{
-					CommonName: "abc",
-					SecretName: "abc",
-					IssuerRef:  validIssuerRef,
-				},
-			},
-			a: &admissionv1.AdmissionRequest{
-				RequestKind: &metav1.GroupVersionKind{Group: "cert-manager.io",
-					Version: "v1alpha3",
-					Kind:    "Certificate"},
-			},
-			warnings: validation.WarningList{
-				fmt.Sprintf(deprecationMessageTemplate,
-					cmapiv1alpha3.SchemeGroupVersion.String(),
-					"Certificate",
-					cmapi.SchemeGroupVersion.String(),
-					"Certificate"),
-			},
-		},
-		"v1beta1 certificate created": {
-			cfg: &internalcmapi.Certificate{
-				Spec: internalcmapi.CertificateSpec{
-					CommonName: "abc",
-					SecretName: "abc",
-					IssuerRef:  validIssuerRef,
-				},
-			},
-			a: &admissionv1.AdmissionRequest{
-				RequestKind: &metav1.GroupVersionKind{Group: "cert-manager.io",
-					Version: "v1beta1",
-					Kind:    "Certificate"},
-			},
-			warnings: validation.WarningList{
-				fmt.Sprintf(deprecationMessageTemplate,
-					cmapiv1beta1.SchemeGroupVersion.String(),
-					"Certificate",
-					cmapi.SchemeGroupVersion.String(),
-					"Certificate"),
-			},
-		},
 		"valid with empty secretTemplate": {
 			cfg: &internalcmapi.Certificate{
 				Spec: internalcmapi.CertificateSpec{
@@ -848,6 +784,117 @@ func TestValidateDuration(t *testing.T) {
 		t.Run(n, func(t *testing.T) {
 			errs := ValidateDuration(&s.cfg.Spec, fldPath)
 			assert.ElementsMatch(t, errs, s.errs)
+		})
+	}
+}
+
+func Test_validateAdditionalOutputFormats(t *testing.T) {
+	tests := map[string]struct {
+		featureEnabled bool
+		spec           *internalcmapi.CertificateSpec
+		expErr         field.ErrorList
+	}{
+		"if feature disabled and no formats defined, expect no error": {
+			featureEnabled: false,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{},
+			},
+			expErr: nil,
+		},
+		"if feature disabled and 1 format defined, expect error": {
+			featureEnabled: false,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+				},
+			},
+			expErr: field.ErrorList{
+				field.Forbidden(field.NewPath("spec", "additionalOutputFormats"), "feature gate AdditionalCertificateOutputFormats must be enabled"),
+			},
+		},
+		"if feature disabled and multiple formats defined, expect error": {
+			featureEnabled: false,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+					{Type: internalcmapi.CertificateOutputFormatType("bar")},
+					{Type: internalcmapi.CertificateOutputFormatType("random")},
+				},
+			},
+			expErr: field.ErrorList{
+				field.Forbidden(field.NewPath("spec", "additionalOutputFormats"), "feature gate AdditionalCertificateOutputFormats must be enabled"),
+			},
+		},
+		"if feature enabled and no formats defined, expect no error": {
+			featureEnabled: true,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{},
+			},
+			expErr: nil,
+		},
+		"if feature enabled and single format defined, expect no error": {
+			featureEnabled: true,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+				},
+			},
+			expErr: nil,
+		},
+		"if feature enabled and multiple unique formats defined, expect no error": {
+			featureEnabled: true,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+					{Type: internalcmapi.CertificateOutputFormatType("bar")},
+					{Type: internalcmapi.CertificateOutputFormatType("random")},
+				},
+			},
+			expErr: nil,
+		},
+		"if feature enabled and multiple formats defined but 2 non-unique, expect error": {
+			featureEnabled: true,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+					{Type: internalcmapi.CertificateOutputFormatType("bar")},
+					{Type: internalcmapi.CertificateOutputFormatType("random")},
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+				},
+			},
+			expErr: field.ErrorList{
+				field.Duplicate(field.NewPath("spec", "additionalOutputFormats").Key("type"), "foo"),
+			},
+		},
+		"if feature enabled and multiple formats defined but multiple non-unique, expect error": {
+			featureEnabled: true,
+			spec: &internalcmapi.CertificateSpec{
+				AdditionalOutputFormats: []internalcmapi.CertificateAdditionalOutputFormat{
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+					{Type: internalcmapi.CertificateOutputFormatType("bar")},
+					{Type: internalcmapi.CertificateOutputFormatType("random")},
+					{Type: internalcmapi.CertificateOutputFormatType("random")},
+					{Type: internalcmapi.CertificateOutputFormatType("foo")},
+					{Type: internalcmapi.CertificateOutputFormatType("bar")},
+					{Type: internalcmapi.CertificateOutputFormatType("bar")},
+					{Type: internalcmapi.CertificateOutputFormatType("123")},
+					{Type: internalcmapi.CertificateOutputFormatType("456")},
+				},
+			},
+			expErr: field.ErrorList{
+				field.Duplicate(field.NewPath("spec", "additionalOutputFormats").Key("type"), "random"),
+				field.Duplicate(field.NewPath("spec", "additionalOutputFormats").Key("type"), "foo"),
+				field.Duplicate(field.NewPath("spec", "additionalOutputFormats").Key("type"), "bar"),
+				field.Duplicate(field.NewPath("spec", "additionalOutputFormats").Key("type"), "bar"),
+			},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultMutableFeatureGate, feature.AdditionalCertificateOutputFormats, test.featureEnabled)()
+			gotErr := validateAdditionalOutputFormats(test.spec, field.NewPath("spec"))
+			assert.Equal(t, test.expErr, gotErr)
 		})
 	}
 }

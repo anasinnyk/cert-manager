@@ -20,20 +20,21 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	csrutil "github.com/jetstack/cert-manager/pkg/controller/certificatesigningrequests/util"
-	"github.com/jetstack/cert-manager/pkg/util"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/framework/addon"
-	"github.com/jetstack/cert-manager/test/e2e/framework/addon/vault"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/featureset"
-	"github.com/jetstack/cert-manager/test/e2e/suite/conformance/certificatesigningrequests"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	csrutil "github.com/cert-manager/cert-manager/pkg/controller/certificatesigningrequests/util"
+	"github.com/cert-manager/cert-manager/pkg/util"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/addon"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/addon/vault"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/featureset"
+	"github.com/cert-manager/cert-manager/test/e2e/suite/conformance/certificatesigningrequests"
 )
 
 var _ = framework.ConformanceDescribe("CertificateSigningRequests", func() {
@@ -85,6 +86,11 @@ func (k *kubernetes) createIssuer(f *framework.Framework) string {
 	}, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred())
 
+	// wait for issuer to be ready
+	By("Waiting for VaultKubernetes Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return fmt.Sprintf("issuers.cert-manager.io/%s.%s", issuer.Namespace, issuer.Name)
 }
 
@@ -99,6 +105,11 @@ func (k *kubernetes) createClusterIssuer(f *framework.Framework) string {
 		Spec: k.issuerSpec(f),
 	}, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred())
+
+	// wait for issuer to be ready
+	By("Waiting for VaultKubernetes Cluster Issuer to be Ready")
+	issuer, err = f.Helper().WaitClusterIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
 
 	return fmt.Sprintf("clusterissuers.cert-manager.io/%s", issuer.Name)
 }

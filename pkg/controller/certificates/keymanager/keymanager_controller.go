@@ -35,17 +35,20 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 
-	apiutil "github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	cmclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
-	cminformers "github.com/jetstack/cert-manager/pkg/client/informers/externalversions"
-	cmlisters "github.com/jetstack/cert-manager/pkg/client/listers/certmanager/v1"
-	controllerpkg "github.com/jetstack/cert-manager/pkg/controller"
-	"github.com/jetstack/cert-manager/pkg/controller/certificates"
-	logf "github.com/jetstack/cert-manager/pkg/logs"
-	"github.com/jetstack/cert-manager/pkg/util/pki"
-	"github.com/jetstack/cert-manager/pkg/util/predicate"
+	internalcertificates "github.com/cert-manager/cert-manager/internal/controller/certificates"
+	"github.com/cert-manager/cert-manager/internal/controller/feature"
+	apiutil "github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	cmclient "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned"
+	cminformers "github.com/cert-manager/cert-manager/pkg/client/informers/externalversions"
+	cmlisters "github.com/cert-manager/cert-manager/pkg/client/listers/certmanager/v1"
+	controllerpkg "github.com/cert-manager/cert-manager/pkg/controller"
+	"github.com/cert-manager/cert-manager/pkg/controller/certificates"
+	logf "github.com/cert-manager/cert-manager/pkg/logs"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
+	"github.com/cert-manager/cert-manager/pkg/util/pki"
+	"github.com/cert-manager/cert-manager/pkg/util/predicate"
 )
 
 const (
@@ -64,6 +67,11 @@ type controller struct {
 	client            cmclient.Interface
 	coreClient        kubernetes.Interface
 	recorder          record.EventRecorder
+
+	// fieldManager is the string which will be used as the Field Manager on
+	// fields created or edited by the cert-manager Kubernetes client during
+	// Apply API calls.
+	fieldManager string
 }
 
 func NewController(
@@ -73,6 +81,7 @@ func NewController(
 	factory informers.SharedInformerFactory,
 	cmFactory cminformers.SharedInformerFactory,
 	recorder record.EventRecorder,
+	fieldManager string,
 ) (*controller, workqueue.RateLimitingInterface, []cache.InformerSynced) {
 	// create a queue used to queue up items to be processed
 	queue := workqueue.NewNamedRateLimitingQueue(workqueue.NewItemExponentialFailureRateLimiter(time.Second*1, time.Second*30), ControllerName)
@@ -109,6 +118,7 @@ func NewController(
 		client:            client,
 		coreClient:        coreClient,
 		recorder:          recorder,
+		fieldManager:      fieldManager,
 	}, queue, mustSync
 }
 
@@ -136,7 +146,7 @@ func (c *controller) ProcessItem(ctx context.Context, key string) error {
 
 	crt, err := c.certificateLister.Certificates(namespace).Get(name)
 	if apierrors.IsNotFound(err) {
-		log.Error(err, "certificate not found for key")
+		log.V(logf.DebugLevel).Info("certificate not found for key", "error", err.Error())
 		return nil
 	}
 	if err != nil {
@@ -303,8 +313,22 @@ func (c *controller) setNextPrivateKeySecretName(ctx context.Context, crt *cmapi
 	}
 	crt = crt.DeepCopy()
 	crt.Status.NextPrivateKeySecretName = name
-	_, err := c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
-	return err
+	return c.updateOrApplyStatus(ctx, crt)
+}
+
+// updateOrApplyStatus will update the controller status. If the
+// ServerSideApply feature is enabled, the managed fields will instead get
+// applied using the relevant Patch API call.
+func (c *controller) updateOrApplyStatus(ctx context.Context, crt *cmapi.Certificate) error {
+	if utilfeature.DefaultFeatureGate.Enabled(feature.ServerSideApply) {
+		return internalcertificates.ApplyStatus(ctx, c.client, c.fieldManager, &cmapi.Certificate{
+			ObjectMeta: metav1.ObjectMeta{Namespace: crt.Namespace, Name: crt.Name},
+			Status:     cmapi.CertificateStatus{NextPrivateKeySecretName: crt.Status.NextPrivateKeySecretName},
+		})
+	} else {
+		_, err := c.client.CertmanagerV1().Certificates(crt.Namespace).UpdateStatus(ctx, crt, metav1.UpdateOptions{})
+		return err
+	}
 }
 
 func (c *controller) createNewPrivateKeySecret(ctx context.Context, crt *cmapi.Certificate, pk crypto.Signer) (*corev1.Secret, error) {
@@ -360,6 +384,7 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 		ctx.KubeSharedInformerFactory,
 		ctx.SharedInformerFactory,
 		ctx.Recorder,
+		ctx.FieldManager,
 	)
 	c.controller = ctrl
 
@@ -367,7 +392,7 @@ func (c *controllerWrapper) Register(ctx *controllerpkg.Context) (workqueue.Rate
 }
 
 func init() {
-	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.Context) (controllerpkg.Interface, error) {
+	controllerpkg.Register(ControllerName, func(ctx *controllerpkg.ContextFactory) (controllerpkg.Interface, error) {
 		return controllerpkg.NewBuilder(ctx, ControllerName).
 			For(&controllerWrapper{}).
 			Complete()

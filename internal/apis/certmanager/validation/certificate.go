@@ -26,13 +26,15 @@ import (
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metavalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	"github.com/jetstack/cert-manager/internal/api/validation"
-	internalcmapi "github.com/jetstack/cert-manager/internal/apis/certmanager"
-	cmmeta "github.com/jetstack/cert-manager/internal/apis/meta"
-	"github.com/jetstack/cert-manager/pkg/api/util"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
+	internalcmapi "github.com/cert-manager/cert-manager/internal/apis/certmanager"
+	cmmeta "github.com/cert-manager/cert-manager/internal/apis/meta"
+	"github.com/cert-manager/cert-manager/internal/webhook/feature"
+	"github.com/cert-manager/cert-manager/pkg/api/util"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	utilfeature "github.com/cert-manager/cert-manager/pkg/util/feature"
 )
 
 // Validation functions for cert-manager Certificate types
@@ -98,21 +100,21 @@ func ValidateCertificateSpec(crt *internalcmapi.CertificateSpec, fldPath *field.
 		}
 	}
 
+	el = append(el, validateAdditionalOutputFormats(crt, fldPath)...)
+
 	return el
 }
 
-func ValidateCertificate(a *admissionv1.AdmissionRequest, obj runtime.Object) (field.ErrorList, validation.WarningList) {
+func ValidateCertificate(a *admissionv1.AdmissionRequest, obj runtime.Object) (field.ErrorList, []string) {
 	crt := obj.(*internalcmapi.Certificate)
 	allErrs := ValidateCertificateSpec(&crt.Spec, field.NewPath("spec"))
-	w := validateAPIVersion(a.RequestKind)
-	return allErrs, w
+	return allErrs, nil
 }
 
-func ValidateUpdateCertificate(a *admissionv1.AdmissionRequest, oldObj, obj runtime.Object) (field.ErrorList, validation.WarningList) {
+func ValidateUpdateCertificate(a *admissionv1.AdmissionRequest, oldObj, obj runtime.Object) (field.ErrorList, []string) {
 	crt := obj.(*internalcmapi.Certificate)
 	allErrs := ValidateCertificateSpec(&crt.Spec, field.NewPath("spec"))
-	w := validateAPIVersion(a.RequestKind)
-	return allErrs, w
+	return allErrs, nil
 }
 
 func validateIssuerRef(issuerRef cmmeta.ObjectReference, fldPath *field.Path) field.ErrorList {
@@ -210,5 +212,28 @@ func ValidateDuration(crt *internalcmapi.CertificateSpec, fldPath *field.Path) f
 	if crt.RenewBefore != nil && crt.RenewBefore.Duration >= duration {
 		el = append(el, field.Invalid(fldPath.Child("renewBefore"), crt.RenewBefore.Duration, fmt.Sprintf("certificate duration %s must be greater than renewBefore %s", duration, crt.RenewBefore.Duration)))
 	}
+	return el
+}
+
+func validateAdditionalOutputFormats(crt *internalcmapi.CertificateSpec, fldPath *field.Path) field.ErrorList {
+	var el field.ErrorList
+
+	if !utilfeature.DefaultFeatureGate.Enabled(feature.AdditionalCertificateOutputFormats) {
+		if len(crt.AdditionalOutputFormats) > 0 {
+			el = append(el, field.Forbidden(fldPath.Child("additionalOutputFormats"), "feature gate AdditionalCertificateOutputFormats must be enabled"))
+		}
+		return el
+	}
+
+	// Ensure the set of output formats is unique, keyed on "Type".
+	aofSet := sets.NewString()
+	for _, val := range crt.AdditionalOutputFormats {
+		if aofSet.Has(string(val.Type)) {
+			el = append(el, field.Duplicate(fldPath.Child("additionalOutputFormats").Key("type"), string(val.Type)))
+			continue
+		}
+		aofSet.Insert(string(val.Type))
+	}
+
 	return el
 }

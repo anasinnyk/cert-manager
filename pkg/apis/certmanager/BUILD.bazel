@@ -3,7 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "go_default_library",
     srcs = ["doc.go"],
-    importpath = "github.com/jetstack/cert-manager/pkg/apis/certmanager",
+    importpath = "github.com/cert-manager/cert-manager/pkg/apis/certmanager",
     visibility = ["//visibility:public"],
 )
 
@@ -19,9 +19,6 @@ filegroup(
     srcs = [
         ":package-srcs",
         "//pkg/apis/certmanager/v1:all-srcs",
-        "//pkg/apis/certmanager/v1alpha2:all-srcs",
-        "//pkg/apis/certmanager/v1alpha3:all-srcs",
-        "//pkg/apis/certmanager/v1beta1:all-srcs",
     ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],

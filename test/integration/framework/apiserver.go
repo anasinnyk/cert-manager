@@ -19,6 +19,7 @@ package framework
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,37 +35,100 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer/versioning"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	webhooktesting "github.com/jetstack/cert-manager/cmd/webhook/app/testing"
-	"github.com/jetstack/cert-manager/pkg/api"
-	apitesting "github.com/jetstack/cert-manager/pkg/api/testing"
-	"github.com/jetstack/cert-manager/test/internal/apiserver"
+	webhooktesting "github.com/cert-manager/cert-manager/cmd/webhook/app/testing"
+	"github.com/cert-manager/cert-manager/internal/test/paths"
+	"github.com/cert-manager/cert-manager/internal/webhook"
+	"github.com/cert-manager/cert-manager/pkg/api"
+	"github.com/cert-manager/cert-manager/pkg/webhook/handlers"
+	"github.com/cert-manager/cert-manager/test/internal/apiserver"
 )
 
 type StopFunc func()
 
-func RunControlPlane(t *testing.T, ctx context.Context) (*rest.Config, StopFunc) {
+// controlPlaneOptions has parameters for the control plane of the integration
+// test framework which can be overridden in tests.
+type controlPlaneOptions struct {
+	crdsDir                  *string
+	webhookConversionHandler handlers.ConversionHook
+}
+
+type RunControlPlaneOption func(*controlPlaneOptions)
+
+// WithCRDDirectory allows alternative CRDs to be loaded into the test API
+// server in tests.
+func WithCRDDirectory(directory string) RunControlPlaneOption {
+	return func(o *controlPlaneOptions) {
+		o.crdsDir = pointer.StringPtr(directory)
+	}
+}
+
+// WithWebhookConversionHandler allows the webhook handler for the `/convert`
+// endpoint to be overridden in tests.
+func WithWebhookConversionHandler(handler handlers.ConversionHook) RunControlPlaneOption {
+	return func(o *controlPlaneOptions) {
+		o.webhookConversionHandler = handler
+	}
+}
+
+func RunControlPlane(t *testing.T, ctx context.Context, optionFunctions ...RunControlPlaneOption) (*rest.Config, StopFunc) {
+	crdDirectoryPath, err := paths.CRDDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	options := &controlPlaneOptions{
+		crdsDir: pointer.StringPtr(crdDirectoryPath),
+	}
+
+	for _, f := range optionFunctions {
+		f(options)
+	}
+
 	env, stopControlPlane := apiserver.RunBareControlPlane(t)
-	config := env.Config
+	testuser, err := env.ControlPlane.AddUser(envtest.User{Name: "test-user", Groups: []string{"cluster-admin"}}, env.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	webhookOpts, stopWebhook := webhooktesting.StartWebhookServer(t, ctx, []string{"--api-server-host=" + config.Host})
+	kubeconfig, err := testuser.KubeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	crdsDir := apitesting.CRDDirectory(t)
-	crds := readCustomResourcesAtPath(t, crdsDir)
+	f, err := ioutil.TempFile("", "integration-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	defer func() {
+		os.Remove(f.Name())
+	}()
+	if _, err := f.Write(kubeconfig); err != nil {
+		t.Fatal(err)
+	}
+
+	webhookOpts, stopWebhook := webhooktesting.StartWebhookServer(
+		t, ctx, []string{"--kubeconfig", f.Name()},
+		webhook.WithConversionHandler(options.webhookConversionHandler),
+	)
+
+	crds := readCustomResourcesAtPath(t, *options.crdsDir)
 	for _, crd := range crds {
 		t.Logf("Found CRD with name %q", crd.Name)
 	}
 	patchCRDConversion(crds, webhookOpts.URL, webhookOpts.CAPEM)
 
-	if _, err := envtest.InstallCRDs(config, envtest.CRDInstallOptions{
+	if _, err := envtest.InstallCRDs(env.Config, envtest.CRDInstallOptions{
 		CRDs: crds,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	cl, err := client.New(config, client.Options{Scheme: api.Scheme})
+	cl, err := client.New(env.Config, client.Options{Scheme: api.Scheme})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +145,7 @@ func RunControlPlane(t *testing.T, ctx context.Context) (*rest.Config, StopFunc)
 		t.Fatal(err)
 	}
 
-	return config, func() {
+	return env.Config, func() {
 		defer stopWebhook()
 		stopControlPlane()
 	}
@@ -96,42 +160,33 @@ func init() {
 	apiextensionsinstall.Install(internalScheme)
 }
 
-func patchCRDConversion(crds []apiextensionsv1.CustomResourceDefinition, url string, caPEM []byte) {
-	for _, crd := range crds {
-		for i := range crd.Spec.Versions {
-			crd.Spec.Versions[i].Served = true
+// patchCRDConversion overrides the conversion configuration of the CRDs that
+// are loaded in to the integration test API server,
+// configuring the conversion to be handled by the local webhook server.
+func patchCRDConversion(crds []*apiextensionsv1.CustomResourceDefinition, url string, caPEM []byte) {
+	for i := range crds {
+		url := fmt.Sprintf("%s%s", url, "/convert")
+		crds[i].Spec.Conversion = &apiextensionsv1.CustomResourceConversion{
+			Strategy: apiextensionsv1.WebhookConverter,
+			Webhook: &apiextensionsv1.WebhookConversion{
+				ClientConfig: &apiextensionsv1.WebhookClientConfig{
+					URL:      &url,
+					CABundle: caPEM,
+				},
+				ConversionReviewVersions: []string{"v1"},
+			},
 		}
-		if crd.Spec.Conversion == nil {
-			continue
-		}
-		if crd.Spec.Conversion.Webhook == nil {
-			continue
-		}
-		if crd.Spec.Conversion.Webhook.ClientConfig == nil {
-			continue
-		}
-		if crd.Spec.Conversion.Webhook.ClientConfig.Service == nil {
-			continue
-		}
-		path := ""
-		if crd.Spec.Conversion.Webhook.ClientConfig.Service.Path != nil {
-			path = *crd.Spec.Conversion.Webhook.ClientConfig.Service.Path
-		}
-		url := fmt.Sprintf("%s%s", url, path)
-		crd.Spec.Conversion.Webhook.ClientConfig.URL = &url
-		crd.Spec.Conversion.Webhook.ClientConfig.CABundle = caPEM
-		crd.Spec.Conversion.Webhook.ClientConfig.Service = nil
 	}
 }
 
-func readCustomResourcesAtPath(t *testing.T, path string) []apiextensionsv1.CustomResourceDefinition {
+func readCustomResourcesAtPath(t *testing.T, path string) []*apiextensionsv1.CustomResourceDefinition {
 	serializer := jsonserializer.NewSerializerWithOptions(jsonserializer.DefaultMetaFactory, internalScheme, internalScheme, jsonserializer.SerializerOptions{
 		Yaml: true,
 	})
 	converter := runtime.UnsafeObjectConvertor(internalScheme)
 	codec := versioning.NewCodec(serializer, serializer, converter, internalScheme, internalScheme, internalScheme, runtime.InternalGroupVersioner, runtime.InternalGroupVersioner, internalScheme.Name())
 
-	var crds []apiextensionsv1.CustomResourceDefinition
+	var crds []*apiextensionsv1.CustomResourceDefinition
 	if err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -151,13 +206,13 @@ func readCustomResourcesAtPath(t *testing.T, path string) []apiextensionsv1.Cust
 	return crds
 }
 
-func readCRDsAtPath(codec runtime.Codec, converter runtime.ObjectConvertor, path string) ([]apiextensionsv1.CustomResourceDefinition, error) {
+func readCRDsAtPath(codec runtime.Codec, converter runtime.ObjectConvertor, path string) ([]*apiextensionsv1.CustomResourceDefinition, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var crds []apiextensionsv1.CustomResourceDefinition
+	var crds []*apiextensionsv1.CustomResourceDefinition
 	for _, d := range strings.Split(string(data), "\n---\n") {
 		// skip empty YAML documents
 		if strings.TrimSpace(d) == "" {
@@ -174,7 +229,7 @@ func readCRDsAtPath(codec runtime.Codec, converter runtime.ObjectConvertor, path
 			return nil, err
 		}
 
-		crds = append(crds, out)
+		crds = append(crds, &out)
 	}
 
 	return crds, nil

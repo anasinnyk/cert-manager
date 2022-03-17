@@ -17,13 +17,11 @@ limitations under the License.
 package certificates
 
 import (
-	"fmt"
-
 	. "github.com/onsi/ginkgo"
 
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/featureset"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/featureset"
 )
 
 // Suite defines a reusable conformance test suite that can be used against any
@@ -99,7 +97,6 @@ func (s *Suite) complete(f *framework.Framework) {
 // it is called by the tests to in Define() to setup and run the test
 func (s *Suite) it(f *framework.Framework, name string, fn func(cmmeta.ObjectReference), requiredFeatures ...featureset.Feature) {
 	if !s.checkFeatures(requiredFeatures...) {
-		fmt.Fprintln(GinkgoWriter, "skipping case due to unsupported features")
 		return
 	}
 	It(name, func() {

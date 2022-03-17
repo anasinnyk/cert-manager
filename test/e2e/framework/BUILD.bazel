@@ -8,7 +8,7 @@ go_library(
         "testenv.go",
         "util.go",
     ],
-    importpath = "github.com/jetstack/cert-manager/test/e2e/framework",
+    importpath = "github.com/cert-manager/cert-manager/test/e2e/framework",
     tags = ["manual"],
     visibility = ["//visibility:public"],
     deps = [
@@ -37,10 +37,10 @@ go_library(
         "@io_k8s_client_go//kubernetes:go_default_library",
         "@io_k8s_client_go//kubernetes/scheme:go_default_library",
         "@io_k8s_client_go//rest:go_default_library",
+        "@io_k8s_component_base//featuregate:go_default_library",
         "@io_k8s_kube_aggregator//pkg/apis/apiregistration/v1:go_default_library",
         "@io_k8s_sigs_controller_runtime//pkg/client:go_default_library",
-        "@io_k8s_sigs_gateway_api//apis/v1alpha1:go_default_library",
-        "@io_k8s_sigs_gateway_api//pkg/client/clientset/versioned:go_default_library",
+        "@io_k8s_sigs_gateway_api//pkg/client/clientset/gateway/versioned:go_default_library",
     ],
 )
 

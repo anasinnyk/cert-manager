@@ -19,8 +19,9 @@ package acme
 import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	gwapi "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	cmmeta "github.com/jetstack/cert-manager/internal/apis/meta"
+	cmmeta "github.com/cert-manager/cert-manager/internal/apis/meta"
 )
 
 // ACMEIssuer contains the specification for an ACME issuer.
@@ -111,7 +112,7 @@ type ACMEExternalAccountBinding struct {
 	// Deprecated: keyAlgorithm exists for historical compatibility reasons and
 	// should not be used. golang/x/crypto/acme hardcodes the algorithm to HS256
 	// so setting this field will have no effect.
-	// See https://github.com/jetstack/cert-manager/issues/3220#issuecomment-809438314
+	// See https://github.com/cert-manager/cert-manager/issues/3220#issuecomment-809438314
 	KeyAlgorithm HMACKeyAlgorithm
 }
 
@@ -192,7 +193,7 @@ type ACMEChallengeSolverHTTP01 struct {
 	// create HTTPRoutes with the specified labels in the same namespace as the challenge.
 	// This solver is experimental, and fields / behaviour may change in the future.
 	// +optional
-	GatewayHTTPRoute *ACMEChallengeSolverHTTP01GatewayHTTPRoute `json:"gatewayHTTPRoute,omitempty"`
+	GatewayHTTPRoute *ACMEChallengeSolverHTTP01GatewayHTTPRoute
 }
 
 type ACMEChallengeSolverHTTP01Ingress struct {
@@ -226,12 +227,14 @@ type ACMEChallengeSolverHTTP01GatewayHTTPRoute struct {
 	// Optional service type for Kubernetes solver service. Supported values
 	// are NodePort or ClusterIP. If unset, defaults to NodePort.
 	// +optional
-	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
+	ServiceType corev1.ServiceType
 
 	// The labels that cert-manager will use when creating the temporary
 	// HTTPRoute needed for solving the HTTP-01 challenge. These labels
 	// must match the label selector of at least one Gateway.
-	Labels map[string]string `json:"labels,omitempty"`
+	Labels map[string]string
+
+	ParentRefs []gwapi.ParentRef
 }
 
 type ACMEChallengeSolverHTTP01IngressPodTemplate struct {
@@ -270,11 +273,11 @@ type ACMEChallengeSolverHTTP01IngressPodSpec struct {
 	Tolerations []corev1.Toleration
 
 	// If specified, the pod's priorityClassName.
-	PriorityClassName string `json:"priorityClassName,omitempty"`
+	PriorityClassName string
 
 	// If specified, the pod's service account
 	// +optional
-	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	ServiceAccountName string
 }
 
 type ACMEChallengeSolverHTTP01IngressTemplate struct {

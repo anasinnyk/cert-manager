@@ -20,19 +20,21 @@ import (
 	"context"
 	"encoding/base64"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwapi "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	cmacme "github.com/jetstack/cert-manager/pkg/apis/acme/v1"
-	cmapi "github.com/jetstack/cert-manager/pkg/apis/certmanager/v1"
-	cmmeta "github.com/jetstack/cert-manager/pkg/apis/meta/v1"
-	"github.com/jetstack/cert-manager/test/e2e/framework"
-	"github.com/jetstack/cert-manager/test/e2e/framework/helper/featureset"
-	"github.com/jetstack/cert-manager/test/e2e/suite/conformance/certificates"
+	cmacme "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
+	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
+	"github.com/cert-manager/cert-manager/test/e2e/framework"
+	"github.com/cert-manager/cert-manager/test/e2e/framework/helper/featureset"
+	"github.com/cert-manager/cert-manager/test/e2e/suite/conformance/certificates"
 )
 
 var _ = framework.ConformanceDescribe("Certificates", func() {
@@ -196,6 +198,11 @@ func (a *acmeIssuerProvisioner) createHTTP01IngressIssuer(f *framework.Framework
 	issuer, err := f.CertManagerClientSet.CertmanagerV1().Issuers(f.Namespace.Name).Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create acme HTTP01 issuer")
 
+	// wait for issuer to be ready
+	By("Waiting for acme HTTP01 Ingress Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
 		Kind:  cmapi.IssuerKind,
@@ -216,6 +223,11 @@ func (a *acmeIssuerProvisioner) createHTTP01IngressClusterIssuer(f *framework.Fr
 
 	issuer, err := f.CertManagerClientSet.CertmanagerV1().ClusterIssuers().Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create acme HTTP01 cluster issuer")
+
+	// wait for issuer to be ready
+	By("Waiting for acme HTTP01 Ingress Cluster Issuer to be Ready")
+	issuer, err = f.Helper().WaitClusterIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
 
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
@@ -248,6 +260,11 @@ func (a *acmeIssuerProvisioner) createHTTP01GatewayIssuer(f *framework.Framework
 	issuer, err := f.CertManagerClientSet.CertmanagerV1().Issuers(f.Namespace.Name).Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create acme HTTP01 issuer")
 
+	// wait for issuer to be ready
+	By("Waiting for acme HTTP01 Gateway Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
 		Kind:  cmapi.IssuerKind,
@@ -275,6 +292,11 @@ func (a *acmeIssuerProvisioner) createPublicACMEServerStagingHTTP01Issuer(f *fra
 	issuer, err := f.CertManagerClientSet.CertmanagerV1().Issuers(f.Namespace.Name).Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create Public ACME Server Staging HTTP01 issuer")
 
+	// wait for issuer to be ready
+	By("Waiting for Public ACME Server Staging HTTP01 Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
 		Kind:  cmapi.IssuerKind,
@@ -295,6 +317,7 @@ func (a *acmeIssuerProvisioner) createHTTP01GatewayClusterIssuer(f *framework.Fr
 		labels[kv[0]] = kv[1]
 	}
 
+	// wait for issuer to be ready
 	By("Creating an ACME HTTP01 Gateway ClusterIssuer")
 	issuer := &cmapi.ClusterIssuer{
 		ObjectMeta: metav1.ObjectMeta{
@@ -305,6 +328,10 @@ func (a *acmeIssuerProvisioner) createHTTP01GatewayClusterIssuer(f *framework.Fr
 
 	issuer, err := f.CertManagerClientSet.CertmanagerV1().ClusterIssuers().Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create acme HTTP01 cluster issuer")
+
+	By("Waiting for acme HTTP01 Gateway Cluster Issuer to be Ready")
+	issuer, err = f.Helper().WaitClusterIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
 
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
@@ -357,6 +384,13 @@ func (a *acmeIssuerProvisioner) createHTTP01GatewayIssuerSpec(serverURL string, 
 						HTTP01: &cmacme.ACMEChallengeSolverHTTP01{
 							GatewayHTTPRoute: &cmacme.ACMEChallengeSolverHTTP01GatewayHTTPRoute{
 								Labels: labels,
+								ParentRefs: []gwapi.ParentRef{
+									{
+										Namespace:   func() *gwapi.Namespace { n := gwapi.Namespace("projectcontour"); return &n }(),
+										Name:        "acmesolver",
+										SectionName: nil,
+									},
+								},
 							},
 						},
 					},
@@ -379,6 +413,11 @@ func (a *acmeIssuerProvisioner) createDNS01Issuer(f *framework.Framework) cmmeta
 	issuer, err := f.CertManagerClientSet.CertmanagerV1().Issuers(f.Namespace.Name).Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create acme DNS01 Issuer")
 
+	// wait for issuer to be ready
+	By("Waiting for acme DNS01 Issuer to be Ready")
+	issuer, err = f.Helper().WaitIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
+
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
 		Kind:  cmapi.IssuerKind,
@@ -398,6 +437,11 @@ func (a *acmeIssuerProvisioner) createDNS01ClusterIssuer(f *framework.Framework)
 	}
 	issuer, err := f.CertManagerClientSet.CertmanagerV1().ClusterIssuers().Create(context.TODO(), issuer, metav1.CreateOptions{})
 	Expect(err).NotTo(HaveOccurred(), "failed to create acme DNS01 ClusterIssuer")
+
+	// wait for issuer to be ready
+	By("Waiting for acme DNS01 Cluster Issuer to be Ready")
+	issuer, err = f.Helper().WaitClusterIssuerReady(issuer, time.Minute*5)
+	Expect(err).ToNot(HaveOccurred())
 
 	return cmmeta.ObjectReference{
 		Group: cmapi.SchemeGroupVersion.Group,
